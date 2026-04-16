@@ -218,6 +218,23 @@ export interface IngestionSourceStatus {
   configured: boolean;
 }
 
+export interface GeminiCategoryStatus {
+  name: string;
+  slug: string;
+  item_count: number;
+  latest_ingestion?: string | null;
+}
+
+export interface GeminiDiscoveryStatus {
+  configured: boolean;
+  model: string;
+  results_per_category: number;
+  lookback_days: number;
+  latest_ingestion?: string | null;
+  total_items: number;
+  categories: GeminiCategoryStatus[];
+}
+
 export interface FilterOptions {
   search?: string;
   category?: string;

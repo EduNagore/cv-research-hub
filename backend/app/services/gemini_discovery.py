@@ -52,6 +52,32 @@ class GeminiDiscoveryService:
             select(Category).where(Category.is_active.is_(True)).order_by(Category.display_order, Category.id)
         )
         categories = result.scalars().all()
+        return await self._run_for_categories(categories)
+
+    async def run_category_discovery(self, category_slug: str) -> Dict[str, Any]:
+        """Query Gemini for a single active category and persist discovered items."""
+        if not settings.GEMINI_API_KEY:
+            return {
+                "source": "gemini_discovery",
+                "ingested": 0,
+                "updated": 0,
+                "skipped": 0,
+                "error": "Gemini API key not configured",
+            }
+
+        result = await self.db.execute(
+            select(Category)
+            .where(Category.is_active.is_(True), Category.slug == category_slug)
+            .order_by(Category.display_order, Category.id)
+        )
+        categories = result.scalars().all()
+        if not categories:
+            raise ValueError(f"Unknown or inactive category: {category_slug}")
+
+        return await self._run_for_categories(categories)
+
+    async def _run_for_categories(self, categories: List[Category]) -> Dict[str, Any]:
+        """Execute Gemini discovery for the provided categories."""
 
         ingested = 0
         updated = 0

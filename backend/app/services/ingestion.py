@@ -56,6 +56,13 @@ class IngestionService:
         result = await service.run_daily_discovery()
         await self.db.commit()
         return result
+
+    async def ingest_gemini_category(self, category_slug: str) -> Dict:
+        """Discover recent items with Gemini for a single category."""
+        service = GeminiDiscoveryService(self.db, batch_id=self.batch_id)
+        result = await service.run_category_discovery(category_slug)
+        await self.db.commit()
+        return result
     
     async def ingest_arxiv(self, days_back: int = 7) -> Dict:
         """Ingest papers from arXiv."""

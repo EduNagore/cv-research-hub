@@ -16,9 +16,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getDashboardStats, getIngestionStatus, triggerIngestion } from '@/lib/api';
+import { getDashboardStats, getIngestionStatus, triggerCategoryIngestion, triggerIngestion } from '@/lib/api';
 import { toast } from 'sonner';
-import type { IngestionSourceStatus, ResearchItemBrief } from '@/types';
+import type { ResearchItemBrief } from '@/types';
 
 function StatCard({ 
   title, 
@@ -136,6 +136,19 @@ export function Dashboard() {
       toast.error(error.message || 'Failed to trigger refresh');
     },
   });
+  const refreshCategoryMutation = useMutation({
+    mutationFn: (categorySlug: string) => triggerCategoryIngestion('gemini', categorySlug),
+    onSuccess: (result) => {
+      toast.success(result.message);
+      queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['category-feed'] });
+      queryClient.invalidateQueries({ queryKey: ['research-items'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to refresh category');
+    },
+  });
 
   if (isLoading) {
     return (
@@ -166,7 +179,7 @@ export function Dashboard() {
   }
 
   const { daily_summary, total_items, items_last_7_days, items_last_30_days } = data;
-  const sourceEntries = Object.entries(ingestionStatus?.sources || {}) as [string, IngestionSourceStatus][];
+  const geminiStatus = ingestionStatus?.gemini_discovery;
 
   return (
     <div className="space-y-6">
@@ -264,22 +277,53 @@ export function Dashboard() {
                 ))}
               </div>
             ) : (
-              <div className="grid gap-3 md:grid-cols-3">
-                {sourceEntries.map(([source, sourceStatus]) => (
-                  <Card key={source} className="border-dashed">
+              <div className="space-y-4">
+                <Card className="border-dashed">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-medium">Gemini Discovery</h4>
+                      <Badge variant={geminiStatus?.configured ? 'secondary' : 'outline'}>
+                        {geminiStatus?.configured ? 'Ready' : 'Needs setup'}
+                      </Badge>
+                    </div>
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <p>{(geminiStatus?.total_items || 0).toLocaleString()} Gemini items indexed</p>
+                      <p>Model: {geminiStatus?.model || 'Not configured'}</p>
+                      <p>
+                        Last run:{' '}
+                        {geminiStatus?.latest_ingestion
+                          ? new Date(geminiStatus.latest_ingestion).toLocaleString()
+                          : 'Never'}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => refreshMutation.mutate('gemini')}
+                      disabled={refreshMutation.isPending || !geminiStatus?.configured}
+                    >
+                      Refresh Gemini
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  {(geminiStatus?.categories || []).map((category) => (
+                    <Card key={category.slug} className="border-dashed">
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center justify-between">
-                        <h4 className="font-medium capitalize">{source.replace(/_/g, ' ')}</h4>
-                        <Badge variant={sourceStatus.configured ? 'secondary' : 'outline'}>
-                          {sourceStatus.configured ? 'Ready' : 'Needs setup'}
+                        <h4 className="font-medium">{category.name}</h4>
+                        <Badge variant={category.item_count > 0 ? 'secondary' : 'outline'}>
+                          {category.item_count > 0 ? 'Has items' : 'Empty'}
                         </Badge>
                       </div>
                       <div className="text-sm text-muted-foreground space-y-1">
-                        <p>{sourceStatus.total_items.toLocaleString()} items indexed</p>
+                        <p>{category.item_count.toLocaleString()} items indexed</p>
                         <p>
                           Last run:{' '}
-                          {sourceStatus.latest_ingestion
-                            ? new Date(sourceStatus.latest_ingestion).toLocaleString()
+                          {category.latest_ingestion
+                            ? new Date(category.latest_ingestion).toLocaleString()
                             : 'Never'}
                         </p>
                       </div>
@@ -287,14 +331,15 @@ export function Dashboard() {
                         size="sm"
                         variant="outline"
                         className="w-full"
-                        onClick={() => refreshMutation.mutate(source === 'papers_with_code' ? 'paperswithcode' : source)}
-                        disabled={refreshMutation.isPending || !sourceStatus.configured}
+                        onClick={() => refreshCategoryMutation.mutate(category.slug)}
+                        disabled={refreshCategoryMutation.isPending || !geminiStatus?.configured}
                       >
-                        Refresh {source.replace(/_/g, ' ')}
+                        Refresh {category.name}
                       </Button>
                     </CardContent>
                   </Card>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </CardContent>

@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.database import AsyncSessionLocal
 from app.core.config import get_settings
+from app.models.category import Category
 from app.models.research_item import ResearchItem, SourceType
+from app.services.content_filters import gemini_discovered_filter
 from app.services.ingestion import IngestionService
 from app.services.ingestion_runner import run_ingestion_job
 
@@ -17,7 +19,7 @@ router = APIRouter()
 settings = get_settings()
 
 
-async def _run_source_ingestion(source: str) -> dict:
+async def _run_source_ingestion(source: str, category_slug: Optional[str] = None) -> dict:
     """Run a source-specific ingestion task with its own DB session."""
     async with AsyncSessionLocal() as session:
         service = IngestionService(session)
@@ -28,7 +30,11 @@ async def _run_source_ingestion(source: str) -> dict:
         elif source == "paperswithcode":
             result = await service.ingest_papers_with_code()
         elif source == "gemini":
-            result = await service.ingest_gemini_discovery()
+            result = (
+                await service.ingest_gemini_category(category_slug)
+                if category_slug
+                else await service.ingest_gemini_discovery()
+            )
         else:
             raise ValueError(f"Unknown source: {source}")
         await session.commit()
@@ -68,6 +74,7 @@ async def _run_recalculate_scores() -> dict:
 async def trigger_ingestion(
     background_tasks: BackgroundTasks,
     source: Optional[str] = None,
+    category_slug: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger manual ingestion."""
@@ -79,13 +86,17 @@ async def trigger_ingestion(
         elif source == "paperswithcode":
             background_tasks.add_task(_run_source_ingestion, "paperswithcode")
         elif source == "gemini":
-            background_tasks.add_task(_run_source_ingestion, "gemini")
+            background_tasks.add_task(_run_source_ingestion, "gemini", category_slug)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
         
         return {
             "success": True,
-            "message": f"Ingestion triggered for {source}",
+            "message": (
+                f"Ingestion triggered for {source} category {category_slug}"
+                if source == "gemini" and category_slug
+                else f"Ingestion triggered for {source}"
+            ),
             "timestamp": datetime.utcnow().isoformat(),
         }
     else:
@@ -104,6 +115,7 @@ async def get_ingestion_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Get ingestion status."""
+    gemini_filter = gemini_discovered_filter()
     status = {}
     for source in SourceType:
         latest_result = await db.execute(
@@ -126,6 +138,39 @@ async def get_ingestion_status(
                 else False
             ),
         }
+
+    gemini_latest_result = await db.execute(
+        select(func.max(ResearchItem.last_ingested_at)).where(gemini_filter)
+    )
+    gemini_total_result = await db.execute(
+        select(func.count(ResearchItem.id)).where(gemini_filter)
+    )
+    gemini_latest = gemini_latest_result.scalar_one_or_none()
+
+    categories_result = await db.execute(
+        select(Category).where(Category.is_active == True).order_by(Category.display_order)
+    )
+    gemini_categories = []
+    for category in categories_result.scalars().all():
+        category_count_result = await db.execute(
+            select(func.count(ResearchItem.id))
+            .join(ResearchItem.categories)
+            .where(Category.id == category.id, gemini_filter)
+        )
+        category_latest_result = await db.execute(
+            select(func.max(ResearchItem.last_ingested_at))
+            .join(ResearchItem.categories)
+            .where(Category.id == category.id, gemini_filter)
+        )
+        category_latest = category_latest_result.scalar_one_or_none()
+        gemini_categories.append(
+            {
+                "name": category.name,
+                "slug": category.slug,
+                "item_count": category_count_result.scalar() or 0,
+                "latest_ingestion": category_latest.isoformat() if category_latest else None,
+            }
+        )
     
     return {
         "sources": status,
@@ -134,6 +179,9 @@ async def get_ingestion_status(
             "model": settings.GEMINI_MODEL,
             "results_per_category": settings.GEMINI_RESULTS_PER_CATEGORY,
             "lookback_days": settings.GEMINI_LOOKBACK_DAYS,
+            "latest_ingestion": gemini_latest.isoformat() if gemini_latest else None,
+            "total_items": gemini_total_result.scalar() or 0,
+            "categories": gemini_categories,
         },
         "last_check": datetime.utcnow().isoformat(),
     }

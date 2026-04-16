@@ -9,6 +9,7 @@ import type {
   DecisionResponse,
   UserItem,
   IngestionSourceStatus,
+  GeminiDiscoveryStatus,
   FilterOptions,
   CategoryFeedResponse,
 } from '@/types';
@@ -231,12 +232,26 @@ export async function triggerIngestion(source?: string): Promise<{
   message: string;
   timestamp: string;
 }> {
-  const params = source ? `?source=${source}` : '';
-  return fetchApi(`/ingestion/trigger${params}`, { method: 'POST' });
+  const params = new URLSearchParams();
+  if (source) params.append('source', source);
+  const query = params.toString();
+  return fetchApi(`/ingestion/trigger${query ? `?${query}` : ''}`, { method: 'POST' });
+}
+
+export async function triggerCategoryIngestion(source: string, categorySlug: string): Promise<{
+  success: boolean;
+  message: string;
+  timestamp: string;
+}> {
+  const params = new URLSearchParams();
+  params.append('source', source);
+  params.append('category_slug', categorySlug);
+  return fetchApi(`/ingestion/trigger?${params.toString()}`, { method: 'POST' });
 }
 
 export async function getIngestionStatus(): Promise<{
   sources: Record<string, IngestionSourceStatus>;
+  gemini_discovery: GeminiDiscoveryStatus;
   last_check: string;
 }> {
   return fetchApi('/ingestion/status');
