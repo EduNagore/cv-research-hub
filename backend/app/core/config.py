@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_RESULTS_PER_CATEGORY: int = 3
     GEMINI_LOOKBACK_DAYS: int = 7
+    GEMINI_MAX_RETRIES: int = 5
+    GEMINI_REQUEST_DELAY_SECONDS: float = 3.0
     
     # Ingestion Settings
     ARXIV_MAX_RESULTS_PER_QUERY: int = 100

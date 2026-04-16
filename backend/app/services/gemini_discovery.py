@@ -1,4 +1,5 @@
 """Gemini-powered discovery of fresh research items."""
+import asyncio
 import hashlib
 import json
 import re
@@ -85,7 +86,7 @@ class GeminiDiscoveryService:
         category_results: List[Dict[str, Any]] = []
 
         async with httpx.AsyncClient(timeout=90.0) as client:
-            for category in categories:
+            for index, category in enumerate(categories):
                 try:
                     items = await self._discover_for_category(client, category)
                     cat_ingested = 0
@@ -124,6 +125,9 @@ class GeminiDiscoveryService:
                             "error": str(exc),
                         }
                     )
+                finally:
+                    if index < len(categories) - 1 and settings.GEMINI_REQUEST_DELAY_SECONDS > 0:
+                        await asyncio.sleep(settings.GEMINI_REQUEST_DELAY_SECONDS)
 
         return {
             "source": "gemini_discovery",
@@ -152,58 +156,18 @@ class GeminiDiscoveryService:
                     "parts": [{"text": self._build_prompt(category)}],
                 }
             ],
-            "tools": [{"googleSearch": {}}],
+            "tools": [{"google_search": {}}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.2,
-                "responseJsonSchema": {
-                    "type": "object",
-                    "properties": {
-                        "items": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "title": {"type": "string"},
-                                    "item_type": {"type": "string"},
-                                    "primary_url": {"type": "string"},
-                                    "paper_url": {"type": "string"},
-                                    "code_url": {"type": "string"},
-                                    "project_page_url": {"type": "string"},
-                                    "authors": {"type": "array", "items": {"type": "string"}},
-                                    "published_at": {"type": "string"},
-                                    "summary": {"type": "string"},
-                                    "why_it_matters": {"type": "string"},
-                                    "problem_solved": {"type": "string"},
-                                    "contribution_description": {"type": "string"},
-                                    "use_cases": {"type": "array", "items": {"type": "string"}},
-                                    "category_slugs": {"type": "array", "items": {"type": "string"}},
-                                    "tags": {"type": "array", "items": {"type": "string"}},
-                                    "contribution_type": {"type": "string"},
-                                    "modality": {"type": "string"},
-                                    "architecture_family": {"type": "string"},
-                                    "model_name": {"type": "string"},
-                                    "source_name": {"type": "string"},
-                                },
-                                "required": ["title", "primary_url", "summary"],
-                            },
-                        }
-                    },
-                    "required": ["items"],
-                },
             },
         }
 
-        response = await client.post(
-            self.API_URL_TEMPLATE.format(model=settings.GEMINI_MODEL),
-            headers={"x-goog-api-key": settings.GEMINI_API_KEY},
-            json=payload,
-        )
-        response.raise_for_status()
+        response = await self._post_with_retry(client, payload)
         data = response.json()
 
         text = self._extract_text_response(data)
-        parsed = json.loads(text)
+        parsed = self._parse_json_response(text)
         items = parsed.get("items", [])
 
         if not isinstance(items, list):
@@ -224,7 +188,14 @@ class GeminiDiscoveryService:
             "Search for a balanced mix of papers, technical articles, repositories, model releases, and architecture writeups "
             "that are relevant to researchers and builders. Exclude low-quality SEO pages, duplicates, and unverifiable claims. "
             "For each item, provide the main URL plus paper/code/project links when available, compact summaries, why it matters, "
-            "use cases, classification hints, and tags. Return strict JSON only."
+            "use cases, classification hints, and tags. "
+            "Return valid JSON only with this exact top-level shape: "
+            "{\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\",\"primary_url\":\"https://...\","
+            "\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\",\"authors\":[\"...\"],"
+            "\"published_at\":\"2026-04-16\",\"summary\":\"...\",\"why_it_matters\":\"...\",\"problem_solved\":\"...\","
+            "\"contribution_description\":\"...\",\"use_cases\":[\"...\"],\"category_slugs\":[\"...\"],\"tags\":[\"...\"],"
+            "\"contribution_type\":\"paper|model|repository|dataset|benchmark\",\"modality\":\"image|video|multimodal|3d|medical|histopathology|dermatology\","
+            "\"architecture_family\":\"cnn|transformer|diffusion|gan|autoencoder|rnn|mlp|hybrid|other\",\"model_name\":\"...\",\"source_name\":\"...\"}]}"
         )
 
     def _extract_text_response(self, response_data: Dict[str, Any]) -> str:
@@ -238,6 +209,60 @@ class GeminiDiscoveryService:
             raise ValueError("Gemini returned no text content")
 
         return "\n".join(text_chunks).strip()
+
+    async def _post_with_retry(self, client: httpx.AsyncClient, payload: Dict[str, Any]) -> httpx.Response:
+        """Post to Gemini with retry and backoff for quota/rate-limit errors."""
+        last_error: Optional[Exception] = None
+        for attempt in range(settings.GEMINI_MAX_RETRIES + 1):
+            try:
+                response = await client.post(
+                    self.API_URL_TEMPLATE.format(model=settings.GEMINI_MODEL),
+                    headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                    json=payload,
+                )
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                detail = exc.response.text.strip()
+                if status_code not in {429, 500, 503} or attempt >= settings.GEMINI_MAX_RETRIES:
+                    raise ValueError(f"Gemini API request failed with {status_code}: {detail}") from exc
+
+                retry_after = exc.response.headers.get("retry-after")
+                delay = self._compute_retry_delay(attempt, retry_after)
+                await asyncio.sleep(delay)
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt >= settings.GEMINI_MAX_RETRIES:
+                    raise ValueError(f"Gemini API transport error: {exc}") from exc
+                await asyncio.sleep(self._compute_retry_delay(attempt, None))
+
+        raise ValueError(f"Gemini API request failed after retries: {last_error}")
+
+    def _compute_retry_delay(self, attempt: int, retry_after: Optional[str]) -> float:
+        """Compute delay before retrying Gemini requests."""
+        if retry_after:
+            try:
+                return max(float(retry_after), settings.GEMINI_REQUEST_DELAY_SECONDS)
+            except ValueError:
+                pass
+        return max(settings.GEMINI_REQUEST_DELAY_SECONDS, min(2 ** attempt, 20))
+
+    def _parse_json_response(self, text: str) -> Dict[str, Any]:
+        """Parse JSON response, tolerating fenced code blocks."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            fenced_match = re.search(r"```json\s*(\{.*\})\s*```", text, flags=re.DOTALL)
+            if fenced_match:
+                return json.loads(fenced_match.group(1))
+
+            object_match = re.search(r"(\{.*\})", text, flags=re.DOTALL)
+            if object_match:
+                return json.loads(object_match.group(1))
+
+            raise ValueError("Gemini returned non-JSON text")
 
     async def _save_discovered_item(self, payload: Dict[str, Any], category: Category) -> str:
         primary_url = payload.get("primary_url", "").strip()
