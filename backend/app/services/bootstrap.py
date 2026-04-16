@@ -14,6 +14,7 @@ from app.models.research_item import (
     StatusLabel,
 )
 from app.models.tag import Tag
+from app.models.user_item import UserItem
 
 
 DEFAULT_CATEGORIES = [
@@ -183,15 +184,15 @@ class BootstrapService:
         self.db = db
 
     async def run(self) -> dict:
-        """Create default categories/tags and starter items when needed."""
+        """Create default categories/tags and remove legacy starter items."""
         categories_created = await self._ensure_categories()
         tags_created = await self._ensure_tags()
-        items_created = await self._ensure_sample_items()
+        removed_bootstrap_items = await self._remove_bootstrap_items()
         await self.db.commit()
         return {
             "categories_created": categories_created,
             "tags_created": tags_created,
-            "items_created": items_created,
+            "removed_bootstrap_items": removed_bootstrap_items,
         }
 
     async def _ensure_categories(self) -> int:
@@ -221,54 +222,46 @@ class BootstrapService:
         return created
 
     async def _ensure_sample_items(self) -> int:
-        existing_items = await self.db.execute(select(ResearchItem.id).limit(1))
-        if existing_items.scalar_one_or_none():
+        return 0
+
+    async def _remove_bootstrap_items(self) -> int:
+        result = await self.db.execute(select(ResearchItem))
+        items = result.scalars().all()
+
+        bootstrap_items = [
+            item
+            for item in items
+            if isinstance(item.raw_metadata, dict) and item.raw_metadata.get("bootstrap") is True
+        ]
+        if not bootstrap_items:
             return 0
 
-        categories = {
-            category.slug: category
-            for category in (await self.db.execute(select(Category))).scalars().all()
-        }
-        tags = {
-            tag.slug: tag
-            for tag in (await self.db.execute(select(Tag))).scalars().all()
-        }
+        bootstrap_ids = [item.id for item in bootstrap_items]
 
-        starter_links = {
-            "vision-transformer-image-worth-16x16-words-abc123": {
-                "categories": ["vision-transformers", "classification"],
-                "tags": ["transformer", "open-source", "sota"],
-            },
-            "stable-diffusion-latent-diffusion-models-def456": {
-                "categories": ["generation", "diffusion"],
-                "tags": ["diffusion", "open-source", "pytorch"],
-            },
-            "yolov8-real-time-object-detection-ghi789": {
-                "categories": ["detection"],
-                "tags": ["cnn", "real-time", "open-source"],
-            },
-            "segment-anything-model-sam-jkl012": {
-                "categories": ["segmentation", "vision-transformers"],
-                "tags": ["transformer", "open-source", "sota"],
-            },
-        }
+        user_items_result = await self.db.execute(
+            select(UserItem).where(UserItem.research_item_id.in_(bootstrap_ids))
+        )
+        for user_item in user_items_result.scalars().all():
+            await self.db.delete(user_item)
 
-        created = 0
-        for item_data in SAMPLE_ITEMS:
-            item = ResearchItem(**item_data)
-            links = starter_links.get(item.slug, {"categories": [], "tags": []})
-            for category_slug in links["categories"]:
-                category = categories.get(category_slug)
-                if category:
-                    item.categories.append(category)
-                    category.item_count += 1
-            for tag_slug in links["tags"]:
-                tag = tags.get(tag_slug)
-                if tag:
-                    item.tags.append(tag)
-                    tag.item_count += 1
-            self.db.add(item)
-            created += 1
+        for item in bootstrap_items:
+            for category in list(item.categories):
+                item.categories.remove(category)
+            for tag in list(item.tags):
+                item.tags.remove(tag)
+            await self.db.delete(item)
 
         await self.db.flush()
-        return created
+        await self._refresh_item_counts()
+        return len(bootstrap_items)
+
+    async def _refresh_item_counts(self) -> None:
+        categories = (await self.db.execute(select(Category))).scalars().all()
+        for category in categories:
+            category.item_count = len(category.research_items)
+
+        tags = (await self.db.execute(select(Tag))).scalars().all()
+        for tag in tags:
+            tag.item_count = len(tag.research_items)
+
+        await self.db.flush()

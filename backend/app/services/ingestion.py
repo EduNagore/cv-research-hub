@@ -39,17 +39,13 @@ class IngestionService:
         self.batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     
     async def run_full_ingestion(self) -> Dict:
-        """Run full ingestion from all sources."""
+        """Run the Gemini-driven ingestion flow."""
         results = {
             "gemini_discovery": await self.ingest_gemini_discovery(),
-            "arxiv": await self.ingest_arxiv(),
-            "papers_with_code": await self.ingest_papers_with_code(),
-            "github": await self.ingest_github(),
         }
         
         # Post-processing
         await self.deduplicate_items()
-        await self.refresh_github_metadata()
         await self.recalculate_all_scores()
         
         return results

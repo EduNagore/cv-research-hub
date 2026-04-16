@@ -172,6 +172,14 @@ export function ResearchItemDetail() {
 
         {/* Links */}
         <div className="flex items-center gap-2 mt-4">
+          {item.source_url && (
+            <Button variant="outline" size="sm" asChild>
+              <a href={item.source_url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Source
+              </a>
+            </Button>
+          )}
           {item.paper_url && (
             <Button variant="outline" size="sm" asChild>
               <a href={item.paper_url} target="_blank" rel="noopener noreferrer">
@@ -185,6 +193,14 @@ export function ResearchItemDetail() {
               <a href={item.abstract_url} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-4 w-4 mr-2" />
                 Abstract
+              </a>
+            </Button>
+          )}
+          {item.code_url && !item.github_url && (
+            <Button variant="outline" size="sm" asChild>
+              <a href={item.code_url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Code
               </a>
             </Button>
           )}
