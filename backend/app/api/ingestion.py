@@ -104,6 +104,13 @@ async def trigger_ingestion(
                     status_code=400,
                     detail="Category refresh is disabled. Use the full Gemini refresh instead.",
                 )
+            if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH:
+                background_tasks.add_task(_run_source_ingestion, "gemini", None)
+                return {
+                    "success": True,
+                    "message": "Full Gemini refresh started in background",
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
             result = await _run_source_ingestion("gemini", category_slug)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
