@@ -58,7 +58,7 @@ async def _run_full_ingestion() -> dict:
                 "ingested": 0,
                 "updated": 0,
                 "skipped": 0,
-                "error": "Full Gemini refresh is disabled. Refresh categories individually.",
+                "error": "Full Gemini refresh is disabled.",
             },
         }
     return await run_ingestion_job(
@@ -99,10 +99,15 @@ async def trigger_ingestion(
         elif source == "paperswithcode":
             result = await _run_source_ingestion("paperswithcode")
         elif source == "gemini":
+            if not settings.GEMINI_ENABLE_MANUAL_REFRESH:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Manual Gemini refresh is disabled. The site refreshes automatically once per day.",
+                )
             if category_slug and not settings.GEMINI_ENABLE_CATEGORY_REFRESH:
                 raise HTTPException(
                     status_code=400,
-                    detail="Category refresh is disabled. Use the full Gemini refresh instead.",
+                    detail="Category refresh is disabled. The site refreshes automatically once per day.",
                 )
             if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH:
                 background_tasks.add_task(_run_source_ingestion, "gemini", None)
@@ -132,7 +137,7 @@ async def trigger_ingestion(
             "message": (
                 "Full ingestion completed"
                 if settings.GEMINI_ENABLE_FULL_REFRESH
-                else "Full Gemini refresh is disabled. Refresh categories individually."
+                else "Full Gemini refresh is disabled."
             ),
             "timestamp": datetime.utcnow().isoformat(),
             "result": result.get("result"),
@@ -210,6 +215,7 @@ async def get_ingestion_status(
             "lookback_days": settings.GEMINI_LOOKBACK_DAYS,
             "full_refresh_enabled": settings.GEMINI_ENABLE_FULL_REFRESH,
             "category_refresh_enabled": settings.GEMINI_ENABLE_CATEGORY_REFRESH,
+            "manual_refresh_enabled": settings.GEMINI_ENABLE_MANUAL_REFRESH,
             "latest_ingestion": gemini_latest.isoformat() if gemini_latest else None,
             "total_items": gemini_total_result.scalar() or 0,
             "categories": gemini_categories,

@@ -1,34 +1,31 @@
-import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { 
-  FileText, 
-  Code, 
-  TrendingUp, 
-  Star, 
-  Zap,
-  Calendar,
+import {
   ArrowRight,
-  RefreshCcw,
+  Calendar,
+  Clock,
+  Code,
   Database,
-  Clock
+  FileText,
+  Star,
+  TrendingUp,
+  Zap,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getDashboardStats, getIngestionStatus, triggerCategoryIngestion, triggerIngestion } from '@/lib/api';
-import { toast } from 'sonner';
-import type { IngestionRunResult, ResearchItemBrief } from '@/types';
+import { getDashboardStats, getIngestionStatus } from '@/lib/api';
+import type { ResearchItemBrief } from '@/types';
 
-function StatCard({ 
-  title, 
-  value, 
-  description, 
-  icon: Icon 
-}: { 
-  title: string; 
-  value: number; 
+function StatCard({
+  title,
+  value,
+  description,
+  icon: Icon,
+}: {
+  title: string;
+  value: number;
   description: string;
   icon: React.ElementType;
 }) {
@@ -52,16 +49,11 @@ function ItemCard({ item }: { item: ResearchItemBrief }) {
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <Link 
-              to={`/items/${item.slug}`}
-              className="font-medium hover:underline line-clamp-2"
-            >
+            <Link to={`/items/${item.slug}`} className="font-medium hover:underline line-clamp-2">
               {item.title}
             </Link>
             {item.short_summary && (
-              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                {item.short_summary}
-              </p>
+              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.short_summary}</p>
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <Badge variant="secondary" className="text-xs">
@@ -84,13 +76,13 @@ function ItemCard({ item }: { item: ResearchItemBrief }) {
   );
 }
 
-function Section({ 
-  title, 
-  items, 
-  viewAllLink 
-}: { 
-  title: string; 
-  items: ResearchItemBrief[]; 
+function Section({
+  title,
+  items,
+  viewAllLink,
+}: {
+  title: string;
+  items: ResearchItemBrief[];
   viewAllLink?: string;
 }) {
   if (items.length === 0) return null;
@@ -118,7 +110,6 @@ function Section({
 
 export function Dashboard() {
   const queryClient = useQueryClient();
-  const [lastRun, setLastRun] = useState<{ label: string; result?: IngestionRunResult } | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: () => getDashboardStats(),
@@ -127,40 +118,6 @@ export function Dashboard() {
     queryKey: ['ingestion-status'],
     queryFn: getIngestionStatus,
     refetchInterval: 30000,
-  });
-  const refreshMutation = useMutation({
-    mutationFn: (source?: string) => triggerIngestion(source),
-    onSuccess: (result) => {
-      setLastRun({
-        label: sourceLabel(undefined),
-        result: result.result,
-      });
-      toast.success(buildToastMessage(result.message, result.result));
-      queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
-      queryClient.invalidateQueries({ queryKey: ['category-feed'] });
-      queryClient.invalidateQueries({ queryKey: ['research-items'] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to trigger refresh');
-    },
-  });
-  const refreshCategoryMutation = useMutation({
-    mutationFn: (categorySlug: string) => triggerCategoryIngestion('gemini', categorySlug),
-    onSuccess: (result, categorySlug) => {
-      setLastRun({
-        label: sourceLabel(categorySlug),
-        result: result.result,
-      });
-      toast.success(buildToastMessage(result.message, result.result));
-      queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
-      queryClient.invalidateQueries({ queryKey: ['category-feed'] });
-      queryClient.invalidateQueries({ queryKey: ['research-items'] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to refresh category');
-    },
   });
 
   if (isLoading) {
@@ -205,23 +162,18 @@ export function Dashboard() {
           </p>
           <p className="text-sm text-muted-foreground mt-2 flex items-center gap-2">
             <Clock className="h-4 w-4" />
-            Last ingestion: {data.latest_ingestion_at ? new Date(data.latest_ingestion_at).toLocaleString() : 'Not yet ingested'}
+            Last ingestion:{' '}
+            {data.latest_ingestion_at ? new Date(data.latest_ingestion_at).toLocaleString() : 'Not yet ingested'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            onClick={() => refreshMutation.mutate(undefined)}
-            disabled={refreshMutation.isPending || geminiStatus?.full_refresh_enabled === false}
-          >
-            <RefreshCcw className="h-4 w-4 mr-2" />
-            {geminiStatus?.full_refresh_enabled === false ? 'Full refresh disabled' : 'Refresh Gemini feeds'}
-          </Button>
           <Button
             variant="ghost"
             onClick={() => {
               queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
               queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
+              queryClient.invalidateQueries({ queryKey: ['category-feed'] });
+              queryClient.invalidateQueries({ queryKey: ['research-items'] });
             }}
           >
             Reload dashboard
@@ -229,7 +181,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Daily Summary */}
       <Card className="bg-gradient-to-r from-primary/10 to-primary/5">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -237,11 +188,11 @@ export function Dashboard() {
             Today's Summary
           </CardTitle>
           <CardDescription>
-            {new Date(daily_summary.date).toLocaleDateString('en-US', { 
-              weekday: 'long', 
-              year: 'numeric', 
-              month: 'long', 
-              day: 'numeric' 
+            {new Date(daily_summary.date).toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
             })}
           </CardDescription>
         </CardHeader>
@@ -271,51 +222,6 @@ export function Dashboard() {
         </CardContent>
       </Card>
 
-      {lastRun && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Last Refresh Result</CardTitle>
-            <CardDescription>{lastRun.label}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-4">
-              <div>
-                <div className="text-2xl font-bold">{lastRun.result?.ingested ?? 0}</div>
-                <div className="text-sm text-muted-foreground">Ingested</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold">{lastRun.result?.updated ?? 0}</div>
-                <div className="text-sm text-muted-foreground">Updated</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold">{lastRun.result?.skipped ?? 0}</div>
-                <div className="text-sm text-muted-foreground">Skipped</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium">{lastRun.result?.batch_id || 'No batch id'}</div>
-                <div className="text-sm text-muted-foreground">Batch</div>
-              </div>
-            </div>
-            {lastRun.result?.error && (
-              <p className="text-sm text-red-600">{lastRun.result.error}</p>
-            )}
-            {lastRun.result?.categories && lastRun.result.categories.length > 0 && (
-              <div className="grid gap-3 md:grid-cols-2">
-                {lastRun.result.categories.map((category) => (
-                  <div key={category.category} className="rounded-md border p-3 text-sm space-y-1">
-                    <div className="font-medium">{category.category}</div>
-                    <div className="text-muted-foreground">
-                      Received {category.received}, ingested {category.ingested}, updated {category.updated}, skipped {category.skipped}
-                    </div>
-                    {category.error && <div className="text-red-600">{category.error}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
@@ -324,7 +230,7 @@ export function Dashboard() {
               Feed Refresh Status
             </CardTitle>
             <CardDescription>
-              Check whether your Gemini-driven category feeds are populated and trigger refreshes when needed.
+              One professional Gemini snapshot refreshes every category automatically once per day.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -348,6 +254,7 @@ export function Dashboard() {
                       <p>{(geminiStatus?.total_items || 0).toLocaleString()} Gemini items indexed</p>
                       <p>Model: {geminiStatus?.model || 'Not configured'}</p>
                       <p>Full refresh: {geminiStatus?.full_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
+                      <p>Manual refresh: {geminiStatus?.manual_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
                       <p>Category refresh: {geminiStatus?.category_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
                       <p>
                         Last run:{' '}
@@ -356,52 +263,37 @@ export function Dashboard() {
                           : 'Never'}
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => refreshMutation.mutate('gemini')}
-                      disabled={
-                        refreshMutation.isPending ||
-                        !geminiStatus?.configured ||
-                        geminiStatus?.full_refresh_enabled === false
-                      }
-                    >
-                      {geminiStatus?.full_refresh_enabled === false ? 'Full refresh disabled' : 'Refresh Gemini'}
-                    </Button>
+                    <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+                      Visitors do not trigger Gemini requests. The scheduler prepares the content once per day and the
+                      site serves the saved results.
+                    </div>
                   </CardContent>
                 </Card>
 
                 <div className="grid gap-3 md:grid-cols-3">
                   {(geminiStatus?.categories || []).map((category) => (
                     <Card key={category.slug} className="border-dashed">
-                    <CardContent className="p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-medium">{category.name}</h4>
-                        <Badge variant={category.item_count > 0 ? 'secondary' : 'outline'}>
-                          {category.item_count > 0 ? 'Has items' : 'Empty'}
-                        </Badge>
-                      </div>
-                      <div className="text-sm text-muted-foreground space-y-1">
-                        <p>{category.item_count.toLocaleString()} items indexed</p>
-                        <p>
-                          Last run:{' '}
-                          {category.latest_ingestion
-                            ? new Date(category.latest_ingestion).toLocaleString()
-                            : 'Never'}
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => refreshCategoryMutation.mutate(category.slug)}
-                        disabled={true}
-                      >
-                        Category refresh disabled
-                      </Button>
-                    </CardContent>
-                  </Card>
+                      <CardContent className="p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium">{category.name}</h4>
+                          <Badge variant={category.item_count > 0 ? 'secondary' : 'outline'}>
+                            {category.item_count > 0 ? 'Has items' : 'Empty'}
+                          </Badge>
+                        </div>
+                        <div className="text-sm text-muted-foreground space-y-1">
+                          <p>{category.item_count.toLocaleString()} items indexed</p>
+                          <p>
+                            Last run:{' '}
+                            {category.latest_ingestion
+                              ? new Date(category.latest_ingestion).toLocaleString()
+                              : 'Never'}
+                          </p>
+                        </div>
+                        <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+                          Updated by the daily Gemini snapshot.
+                        </div>
+                      </CardContent>
+                    </Card>
                   ))}
                 </div>
               </div>
@@ -412,85 +304,44 @@ export function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle>Daily Routine</CardTitle>
-            <CardDescription>Suggested flow for checking the site each day.</CardDescription>
+            <CardDescription>How the site stays fresh without per-visitor Gemini calls.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <p>1. Refresh all sources to pull the latest arXiv, Papers with Code, and GitHub items.</p>
-            <p>2. Start with “Top 10 Today” for the strongest overall signal.</p>
-            <p>3. Use “Most Promising Papers” for research and “Useful Repositories” for implementation ideas.</p>
-            <p>4. Bookmark or favorite items you want to revisit in your library.</p>
+            <p>1. Once per day, one Gemini prompt searches for the latest articles, repositories, code, and architecture updates for every category.</p>
+            <p>2. Gemini returns one structured JSON snapshot, and the backend saves each item into the correct category.</p>
+            <p>3. Visitors browse already-prepared results, so the page stays responsive even if many people open it.</p>
+            <p>4. Use Reload dashboard to inspect the latest saved state without triggering new Gemini requests.</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Stats */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <StatCard 
-          title="Total Items" 
-          value={total_items} 
-          description="All time research items"
-          icon={FileText}
-        />
-        <StatCard 
-          title="Last 7 Days" 
-          value={items_last_7_days} 
-          description="Recent additions"
-          icon={TrendingUp}
-        />
-        <StatCard 
-          title="Last 30 Days" 
-          value={items_last_30_days} 
-          description="Monthly activity"
-          icon={Calendar}
-        />
-        <StatCard 
-          title="Repositories" 
-          value={data.total_repositories} 
-          description="With code available"
-          icon={Code}
-        />
+        <StatCard title="Total Items" value={total_items} description="All time research items" icon={FileText} />
+        <StatCard title="Last 7 Days" value={items_last_7_days} description="Recent additions" icon={TrendingUp} />
+        <StatCard title="Last 30 Days" value={items_last_30_days} description="Monthly activity" icon={Calendar} />
+        <StatCard title="Repositories" value={data.total_repositories} description="With code available" icon={Code} />
       </div>
 
-      {/* Content Sections */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <Section 
-          title="Top 10 Today" 
-          items={data.top_10_today}
-          viewAllLink="/items"
-        />
-        <Section 
-          title="Most Promising Papers" 
+        <Section title="Top 10 Today" items={data.top_10_today} viewAllLink="/items" />
+        <Section
+          title="Most Promising Papers"
           items={data.most_promising_papers}
           viewAllLink="/items?contribution_type=paper"
         />
-        <Section 
-          title="Useful Repositories" 
+        <Section
+          title="Useful Repositories"
           items={data.useful_repositories}
           viewAllLink="/items?has_github=true"
         />
-        <Section 
-          title="New Architectures" 
+        <Section
+          title="New Architectures"
           items={data.new_architectures}
           viewAllLink="/items?contribution_type=model"
         />
-        <Section 
-          title="Worth Looking At" 
-          items={data.worth_looking_at}
-        />
-        <Section 
-          title="Benchmarks & Datasets" 
-          items={data.new_benchmarks_datasets}
-        />
+        <Section title="Worth Looking At" items={data.worth_looking_at} />
+        <Section title="Benchmarks & Datasets" items={data.new_benchmarks_datasets} />
       </div>
     </div>
   );
-}
-
-function sourceLabel(categorySlug?: string) {
-  return categorySlug ? `Gemini category refresh for ${categorySlug}` : 'Gemini full refresh';
-}
-
-function buildToastMessage(message: string, result?: IngestionRunResult) {
-  if (!result) return message;
-  return `${message} | ingested ${result.ingested ?? 0}, updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}`;
 }

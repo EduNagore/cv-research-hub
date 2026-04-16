@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     GEMINI_LOOKBACK_DAYS: int = 7
     GEMINI_ENABLE_FULL_REFRESH: bool = True
     GEMINI_ENABLE_CATEGORY_REFRESH: bool = False
+    GEMINI_ENABLE_MANUAL_REFRESH: bool = False
     GEMINI_MAX_RETRIES: int = 5
     GEMINI_REQUEST_DELAY_SECONDS: float = 3.0
     

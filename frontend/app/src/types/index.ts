@@ -232,6 +232,7 @@ export interface GeminiDiscoveryStatus {
   lookback_days: number;
   full_refresh_enabled: boolean;
   category_refresh_enabled: boolean;
+  manual_refresh_enabled: boolean;
   latest_ingestion?: string | null;
   total_items: number;
   categories: GeminiCategoryStatus[];
