@@ -24,14 +24,21 @@ async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
+  const hasBody = options?.body !== undefined && options?.body !== null;
+  const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+
+  if (hasBody && !isFormData && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers,
     });
   } catch (error) {
     const message =
