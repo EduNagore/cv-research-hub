@@ -41,6 +41,19 @@ def daily_ingestion_task(self):
     """Daily ingestion task."""
     async def run():
         try:
+            if not settings.GEMINI_ENABLE_FULL_REFRESH:
+                return {
+                    "success": True,
+                    "job": "daily_ingestion",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "result": {
+                        "source": "gemini_discovery",
+                        "ingested": 0,
+                        "updated": 0,
+                        "skipped": 0,
+                        "error": "Daily full Gemini refresh is disabled. Use category refreshes instead.",
+                    },
+                }
             return await run_ingestion_job(
                 lambda service: service.run_full_ingestion(),
                 job_name="daily_ingestion",

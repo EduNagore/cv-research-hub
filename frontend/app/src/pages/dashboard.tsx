@@ -212,10 +212,10 @@ export function Dashboard() {
           <Button
             variant="outline"
             onClick={() => refreshMutation.mutate(undefined)}
-            disabled={refreshMutation.isPending}
+            disabled={refreshMutation.isPending || geminiStatus?.full_refresh_enabled === false}
           >
             <RefreshCcw className="h-4 w-4 mr-2" />
-            Refresh Gemini feeds
+            {geminiStatus?.full_refresh_enabled === false ? 'Full refresh disabled' : 'Refresh Gemini feeds'}
           </Button>
           <Button
             variant="ghost"
@@ -347,6 +347,8 @@ export function Dashboard() {
                     <div className="text-sm text-muted-foreground space-y-1">
                       <p>{(geminiStatus?.total_items || 0).toLocaleString()} Gemini items indexed</p>
                       <p>Model: {geminiStatus?.model || 'Not configured'}</p>
+                      <p>Full refresh: {geminiStatus?.full_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
+                      <p>Category refresh: {geminiStatus?.category_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
                       <p>
                         Last run:{' '}
                         {geminiStatus?.latest_ingestion
@@ -359,9 +361,13 @@ export function Dashboard() {
                       variant="outline"
                       className="w-full"
                       onClick={() => refreshMutation.mutate('gemini')}
-                      disabled={refreshMutation.isPending || !geminiStatus?.configured}
+                      disabled={
+                        refreshMutation.isPending ||
+                        !geminiStatus?.configured ||
+                        geminiStatus?.full_refresh_enabled === false
+                      }
                     >
-                      Refresh Gemini
+                      {geminiStatus?.full_refresh_enabled === false ? 'Full refresh disabled' : 'Refresh Gemini'}
                     </Button>
                   </CardContent>
                 </Card>
@@ -390,9 +396,9 @@ export function Dashboard() {
                         variant="outline"
                         className="w-full"
                         onClick={() => refreshCategoryMutation.mutate(category.slug)}
-                        disabled={refreshCategoryMutation.isPending || !geminiStatus?.configured}
+                        disabled={true}
                       >
-                        Refresh {category.name}
+                        Category refresh disabled
                       </Button>
                     </CardContent>
                   </Card>

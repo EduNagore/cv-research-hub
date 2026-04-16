@@ -1,5 +1,4 @@
 """Gemini-powered discovery of fresh research items."""
-import asyncio
 import hashlib
 import json
 import re
@@ -28,7 +27,7 @@ settings = get_settings()
 
 
 class GeminiDiscoveryService:
-    """Discover fresh research items by prompting Gemini per category."""
+    """Discover fresh research items with a Gemini-generated category snapshot."""
 
     API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -39,7 +38,7 @@ class GeminiDiscoveryService:
         self.scoring_service = ScoringService()
 
     async def run_daily_discovery(self) -> Dict[str, Any]:
-        """Query Gemini once per active category and persist discovered items."""
+        """Query Gemini once for all active categories and persist discovered items."""
         if not settings.GEMINI_API_KEY:
             return {
                 "source": "gemini_discovery",
@@ -53,10 +52,12 @@ class GeminiDiscoveryService:
             select(Category).where(Category.is_active.is_(True)).order_by(Category.display_order, Category.id)
         )
         categories = result.scalars().all()
-        return await self._run_for_categories(categories)
+        return await self._run_snapshot_discovery(categories)
 
     async def run_category_discovery(self, category_slug: str) -> Dict[str, Any]:
         """Query Gemini for a single active category and persist discovered items."""
+        if not settings.GEMINI_ENABLE_CATEGORY_REFRESH:
+            raise ValueError("Category refresh is disabled. Use the daily full Gemini refresh instead.")
         if not settings.GEMINI_API_KEY:
             return {
                 "source": "gemini_discovery",
@@ -75,59 +76,63 @@ class GeminiDiscoveryService:
         if not categories:
             raise ValueError(f"Unknown or inactive category: {category_slug}")
 
-        return await self._run_for_categories(categories)
+        return await self._run_snapshot_discovery(categories)
 
-    async def _run_for_categories(self, categories: List[Category]) -> Dict[str, Any]:
-        """Execute Gemini discovery for the provided categories."""
-
+    async def _run_snapshot_discovery(self, categories: List[Category]) -> Dict[str, Any]:
+        """Execute Gemini discovery for the provided categories using one grouped snapshot call."""
         ingested = 0
         updated = 0
         skipped = 0
         category_results: List[Dict[str, Any]] = []
+        categories_by_slug = {category.slug: category for category in categories}
 
         async with httpx.AsyncClient(timeout=90.0) as client:
-            for index, category in enumerate(categories):
-                try:
-                    items = await self._discover_for_category(client, category)
-                    cat_ingested = 0
-                    cat_updated = 0
-                    cat_skipped = 0
+            grouped_items = await self._discover_snapshot(client, categories)
 
-                    for payload in items:
-                        outcome = await self._save_discovered_item(payload, category)
-                        if outcome == "ingested":
-                            ingested += 1
-                            cat_ingested += 1
-                        elif outcome == "updated":
-                            updated += 1
-                            cat_updated += 1
-                        else:
-                            skipped += 1
-                            cat_skipped += 1
+        for category in categories:
+            items = grouped_items.get(category.slug, [])
+            cat_ingested = 0
+            cat_updated = 0
+            cat_skipped = 0
+            cat_error: Optional[str] = None
+            try:
+                for payload in items:
+                    outcome = await self._save_discovered_item(payload, category)
+                    if outcome == "ingested":
+                        ingested += 1
+                        cat_ingested += 1
+                    elif outcome == "updated":
+                        updated += 1
+                        cat_updated += 1
+                    else:
+                        skipped += 1
+                        cat_skipped += 1
+            except Exception as exc:
+                cat_error = str(exc)
 
-                    category_results.append(
-                        {
-                            "category": category.slug,
-                            "received": len(items),
-                            "ingested": cat_ingested,
-                            "updated": cat_updated,
-                            "skipped": cat_skipped,
-                        }
-                    )
-                except Exception as exc:
-                    category_results.append(
-                        {
-                            "category": category.slug,
-                            "received": 0,
-                            "ingested": 0,
-                            "updated": 0,
-                            "skipped": 0,
-                            "error": str(exc),
-                        }
-                    )
-                finally:
-                    if index < len(categories) - 1 and settings.GEMINI_REQUEST_DELAY_SECONDS > 0:
-                        await asyncio.sleep(settings.GEMINI_REQUEST_DELAY_SECONDS)
+            entry = {
+                "category": category.slug,
+                "received": len(items),
+                "ingested": cat_ingested,
+                "updated": cat_updated,
+                "skipped": cat_skipped,
+            }
+            if cat_error:
+                entry["error"] = cat_error
+            category_results.append(entry)
+
+        extra_category_slugs = [slug for slug in grouped_items.keys() if slug not in categories_by_slug]
+        for slug in extra_category_slugs:
+            category_results.append(
+                {
+                    "category": slug,
+                    "received": len(grouped_items[slug]),
+                    "ingested": 0,
+                    "updated": 0,
+                    "skipped": len(grouped_items[slug]),
+                    "error": "Gemini returned an unknown category slug",
+                }
+            )
 
         return {
             "source": "gemini_discovery",
@@ -138,7 +143,8 @@ class GeminiDiscoveryService:
             "categories": category_results,
         }
 
-    async def _discover_for_category(self, client: httpx.AsyncClient, category: Category) -> List[Dict[str, Any]]:
+    async def _discover_snapshot(self, client: httpx.AsyncClient, categories: List[Category]) -> Dict[str, List[Dict[str, Any]]]:
+        """Ask Gemini for one grouped JSON payload covering all requested categories."""
         payload = {
             "systemInstruction": {
                 "parts": [
@@ -153,7 +159,7 @@ class GeminiDiscoveryService:
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": self._build_prompt(category)}],
+                    "parts": [{"text": self._build_snapshot_prompt(categories)}],
                 }
             ],
             "tools": [{"google_search": {}}],
@@ -168,34 +174,45 @@ class GeminiDiscoveryService:
 
         text = self._extract_text_response(data)
         parsed = self._parse_json_response(text)
-        items = parsed.get("items", [])
+        category_groups = parsed.get("categories", [])
+        if not isinstance(category_groups, list):
+            return {}
 
-        if not isinstance(items, list):
-            return []
+        grouped_items: Dict[str, List[Dict[str, Any]]] = {}
+        for group in category_groups:
+            if not isinstance(group, dict):
+                continue
+            category_slug = group.get("category_slug")
+            items = group.get("items", [])
+            if not isinstance(category_slug, str) or not isinstance(items, list):
+                continue
 
-        normalized_items = []
-        for item in items[: settings.GEMINI_RESULTS_PER_CATEGORY]:
-            if isinstance(item, dict) and item.get("title") and item.get("primary_url") and item.get("summary"):
-                normalized_items.append(item)
+            normalized_items = []
+            for item in items[: settings.GEMINI_RESULTS_PER_CATEGORY]:
+                if isinstance(item, dict) and item.get("title") and item.get("primary_url") and item.get("summary"):
+                    normalized_items.append(item)
+            grouped_items[category_slug] = normalized_items
 
-        return normalized_items
+        return grouped_items
 
-    def _build_prompt(self, category: Category) -> str:
+    def _build_snapshot_prompt(self, categories: List[Category]) -> str:
+        category_lines = "\n".join(
+            f'- slug: "{category.slug}", name: "{category.name}", description: "{category.description or "N/A"}"'
+            for category in categories
+        )
         return (
             f"Find up to {settings.GEMINI_RESULTS_PER_CATEGORY} genuinely recent items from the last "
-            f"{settings.GEMINI_LOOKBACK_DAYS} days for the computer vision category '{category.name}' "
-            f"(slug: {category.slug}). Category description: {category.description or 'N/A'}. "
-            "Search for a balanced mix of papers, technical articles, repositories, model releases, and architecture writeups "
-            "that are relevant to researchers and builders. Exclude low-quality SEO pages, duplicates, and unverifiable claims. "
-            "For each item, provide the main URL plus paper/code/project links when available, compact summaries, why it matters, "
-            "use cases, classification hints, and tags. "
-            "Return valid JSON only with this exact top-level shape: "
-            "{\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\",\"primary_url\":\"https://...\","
-            "\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\",\"authors\":[\"...\"],"
-            "\"published_at\":\"2026-04-16\",\"summary\":\"...\",\"why_it_matters\":\"...\",\"problem_solved\":\"...\","
-            "\"contribution_description\":\"...\",\"use_cases\":[\"...\"],\"category_slugs\":[\"...\"],\"tags\":[\"...\"],"
+            f"{settings.GEMINI_LOOKBACK_DAYS} days for each of these computer vision categories.\n"
+            f"{category_lines}\n"
+            "Use Google Search grounding. Search for a balanced mix of papers, technical articles, repositories, model releases, "
+            "and architecture writeups that are relevant to researchers and builders. Exclude low-quality SEO pages, duplicates, "
+            "and unverifiable claims. Return only one valid JSON object with this exact top-level shape: "
+            "{\"categories\":[{\"category_slug\":\"classification\",\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\","
+            "\"primary_url\":\"https://...\",\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\","
+            "\"authors\":[\"...\"],\"published_at\":\"2026-04-16\",\"summary\":\"...\",\"why_it_matters\":\"...\",\"problem_solved\":\"...\","
+            "\"contribution_description\":\"...\",\"use_cases\":[\"...\"],\"category_slugs\":[\"classification\"],\"tags\":[\"...\"],"
             "\"contribution_type\":\"paper|model|repository|dataset|benchmark\",\"modality\":\"image|video|multimodal|3d|medical|histopathology|dermatology\","
-            "\"architecture_family\":\"cnn|transformer|diffusion|gan|autoencoder|rnn|mlp|hybrid|other\",\"model_name\":\"...\",\"source_name\":\"...\"}]}"
+            "\"architecture_family\":\"cnn|transformer|diffusion|gan|autoencoder|rnn|mlp|hybrid|other\",\"model_name\":\"...\",\"source_name\":\"...\"}]}]}"
         )
 
     def _extract_text_response(self, response_data: Dict[str, Any]) -> str:

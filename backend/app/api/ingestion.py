@@ -48,6 +48,19 @@ async def _run_source_ingestion(source: str, category_slug: Optional[str] = None
 
 async def _run_full_ingestion() -> dict:
     """Run the full ingestion pipeline in its own DB session."""
+    if not settings.GEMINI_ENABLE_FULL_REFRESH:
+        return {
+            "success": True,
+            "job": "full_ingestion",
+            "timestamp": datetime.utcnow().isoformat(),
+            "result": {
+                "source": "gemini_discovery",
+                "ingested": 0,
+                "updated": 0,
+                "skipped": 0,
+                "error": "Full Gemini refresh is disabled. Refresh categories individually.",
+            },
+        }
     return await run_ingestion_job(
         lambda service: service.run_full_ingestion(),
         job_name="full_ingestion",
@@ -86,6 +99,11 @@ async def trigger_ingestion(
         elif source == "paperswithcode":
             result = await _run_source_ingestion("paperswithcode")
         elif source == "gemini":
+            if category_slug and not settings.GEMINI_ENABLE_CATEGORY_REFRESH:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Category refresh is disabled. Use the full Gemini refresh instead.",
+                )
             result = await _run_source_ingestion("gemini", category_slug)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
@@ -104,7 +122,11 @@ async def trigger_ingestion(
         result = await _run_full_ingestion()
         return {
             "success": True,
-            "message": "Full ingestion completed",
+            "message": (
+                "Full ingestion completed"
+                if settings.GEMINI_ENABLE_FULL_REFRESH
+                else "Full Gemini refresh is disabled. Refresh categories individually."
+            ),
             "timestamp": datetime.utcnow().isoformat(),
             "result": result.get("result"),
         }
@@ -179,6 +201,8 @@ async def get_ingestion_status(
             "model": settings.GEMINI_MODEL,
             "results_per_category": settings.GEMINI_RESULTS_PER_CATEGORY,
             "lookback_days": settings.GEMINI_LOOKBACK_DAYS,
+            "full_refresh_enabled": settings.GEMINI_ENABLE_FULL_REFRESH,
+            "category_refresh_enabled": settings.GEMINI_ENABLE_CATEGORY_REFRESH,
             "latest_ingestion": gemini_latest.isoformat() if gemini_latest else None,
             "total_items": gemini_total_result.scalar() or 0,
             "categories": gemini_categories,
