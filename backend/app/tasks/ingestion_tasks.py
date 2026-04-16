@@ -50,7 +50,6 @@ def daily_ingestion_task(self):
     
     return asyncio.run(run())
 
-
 @celery_app.task(bind=True, max_retries=3)
 def refresh_github_metadata_task(self):
     """Refresh GitHub metadata task."""

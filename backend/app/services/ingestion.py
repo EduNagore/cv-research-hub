@@ -23,6 +23,7 @@ from app.models.research_item import (
 )
 from app.models.tag import Tag
 from app.services.classification import ClassificationService
+from app.services.gemini_discovery import GeminiDiscoveryService
 from app.services.scoring import ScoringService
 
 settings = get_settings()
@@ -40,6 +41,7 @@ class IngestionService:
     async def run_full_ingestion(self) -> Dict:
         """Run full ingestion from all sources."""
         results = {
+            "gemini_discovery": await self.ingest_gemini_discovery(),
             "arxiv": await self.ingest_arxiv(),
             "papers_with_code": await self.ingest_papers_with_code(),
             "github": await self.ingest_github(),
@@ -51,6 +53,13 @@ class IngestionService:
         await self.recalculate_all_scores()
         
         return results
+
+    async def ingest_gemini_discovery(self) -> Dict:
+        """Discover recent items with Gemini and store them as research items."""
+        service = GeminiDiscoveryService(self.db, batch_id=self.batch_id)
+        result = await service.run_daily_discovery()
+        await self.db.commit()
+        return result
     
     async def ingest_arxiv(self, days_back: int = 7) -> Dict:
         """Ingest papers from arXiv."""

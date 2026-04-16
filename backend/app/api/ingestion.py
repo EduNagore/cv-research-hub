@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.database import AsyncSessionLocal
 from app.core.config import get_settings
 from app.models.research_item import ResearchItem, SourceType
+from app.services.ingestion import IngestionService
 from app.services.ingestion_runner import run_ingestion_job
 
 router = APIRouter()
@@ -26,6 +27,8 @@ async def _run_source_ingestion(source: str) -> dict:
             result = await service.ingest_github()
         elif source == "paperswithcode":
             result = await service.ingest_papers_with_code()
+        elif source == "gemini":
+            result = await service.ingest_gemini_discovery()
         else:
             raise ValueError(f"Unknown source: {source}")
         await session.commit()
@@ -75,6 +78,8 @@ async def trigger_ingestion(
             background_tasks.add_task(_run_source_ingestion, "github")
         elif source == "paperswithcode":
             background_tasks.add_task(_run_source_ingestion, "paperswithcode")
+        elif source == "gemini":
+            background_tasks.add_task(_run_source_ingestion, "gemini")
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
         
@@ -124,6 +129,12 @@ async def get_ingestion_status(
     
     return {
         "sources": status,
+        "gemini_discovery": {
+            "configured": bool(settings.GEMINI_API_KEY),
+            "model": settings.GEMINI_MODEL,
+            "results_per_category": settings.GEMINI_RESULTS_PER_CATEGORY,
+            "lookback_days": settings.GEMINI_LOOKBACK_DAYS,
+        },
         "last_check": datetime.utcnow().isoformat(),
     }
 

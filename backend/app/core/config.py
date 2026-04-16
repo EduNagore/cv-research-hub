@@ -50,7 +50,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("GITHUB_TOKEN", "OPENAI_API_KEY", "HUGGINGFACE_TOKEN", mode="before")
+    @field_validator("GITHUB_TOKEN", "OPENAI_API_KEY", "HUGGINGFACE_TOKEN", "GEMINI_API_KEY", mode="before")
     @classmethod
     def normalize_placeholder_secrets(cls, value):
         """Treat example placeholder secrets as unset values."""
@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     HUGGINGFACE_TOKEN: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_RESULTS_PER_CATEGORY: int = 3
+    GEMINI_LOOKBACK_DAYS: int = 7
     
     # Ingestion Settings
     ARXIV_MAX_RESULTS_PER_QUERY: int = 100
