@@ -81,6 +81,18 @@ function ResearchItemCard({ item }: { item: ResearchItem }) {
               <span>Score: {item.relevance_score.toFixed(1)}</span>
               
               <div className="flex items-center gap-2 ml-auto">
+                {item.source_url && (
+                  <a 
+                    href={item.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-primary"
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open source article"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
                 {item.paper_url && (
                   <a 
                     href={item.paper_url}
@@ -88,6 +100,18 @@ function ResearchItemCard({ item }: { item: ResearchItem }) {
                     rel="noopener noreferrer"
                     className="hover:text-primary"
                     onClick={(e) => e.stopPropagation()}
+                  >
+                    <FileText className="h-4 w-4" />
+                  </a>
+                )}
+                {item.code_url && !item.github_url && (
+                  <a 
+                    href={item.code_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-primary"
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open code"
                   >
                     <FileText className="h-4 w-4" />
                   </a>

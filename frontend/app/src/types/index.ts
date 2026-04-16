@@ -54,6 +54,16 @@ export interface Category {
   item_count: number;
 }
 
+export interface CategoryFeedGroup {
+  category: Category;
+  items: ResearchItem[];
+}
+
+export interface CategoryFeedResponse {
+  generated_at: string;
+  categories: CategoryFeedGroup[];
+}
+
 export interface Tag {
   id: number;
   name: string;

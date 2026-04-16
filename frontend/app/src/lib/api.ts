@@ -9,7 +9,8 @@ import type {
   DecisionResponse,
   UserItem,
   IngestionSourceStatus,
-  FilterOptions 
+  FilterOptions,
+  CategoryFeedResponse,
 } from '@/types';
 
 const API_BASE_URL =
@@ -92,6 +93,10 @@ export async function getCategories(): Promise<Category[]> {
 
 export async function getCategory(slug: string): Promise<Category> {
   return fetchApi<Category>(`/categories/${slug}`);
+}
+
+export async function getCategoryFeed(limitPerCategory: number = 6): Promise<CategoryFeedResponse> {
+  return fetchApi<CategoryFeedResponse>(`/categories/feed?limit_per_category=${limitPerCategory}`);
 }
 
 // Tags

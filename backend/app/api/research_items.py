@@ -20,6 +20,7 @@ from app.schemas.research_item import (
     ResearchItemListResponse,
     ResearchItemResponse,
 )
+from app.services.content_filters import gemini_discovered_filter
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ async def list_research_items(
     db: AsyncSession = Depends(get_db),
 ) -> ResearchItemListResponse:
     """List research items with filtering."""
-    query = select(ResearchItem)
+    query = select(ResearchItem).where(gemini_discovered_filter())
     
     # Apply filters
     if search:
@@ -212,7 +213,8 @@ async def search_research_items(
                                         coalesce(short_summary, '')),
                    plainto_tsquery('english', :query)) as rank
     FROM research_items
-    WHERE to_tsvector('english', coalesce(title, '') || ' ' || 
+    WHERE source_id LIKE 'gemini_%'
+      AND to_tsvector('english', coalesce(title, '') || ' ' || 
                                   coalesce(abstract, '') || ' ' || 
                                   coalesce(short_summary, ''))
           @@ plainto_tsquery('english', :query)
@@ -247,7 +249,8 @@ async def search_research_items(
     count_query = f"""
     SELECT COUNT(*)
     FROM research_items
-    WHERE to_tsvector('english', coalesce(title, '') || ' ' || 
+    WHERE source_id LIKE 'gemini_%'
+      AND to_tsvector('english', coalesce(title, '') || ' ' || 
                                   coalesce(abstract, '') || ' ' || 
                                   coalesce(short_summary, ''))
           @@ plainto_tsquery('english', :query)
@@ -286,7 +289,10 @@ async def get_research_item(
 ) -> ResearchItemResponse:
     """Get a single research item by slug."""
     result = await db.execute(
-        select(ResearchItem).where(ResearchItem.slug == slug)
+        select(ResearchItem).where(
+            ResearchItem.slug == slug,
+            gemini_discovered_filter(),
+        )
     )
     item = result.scalar_one_or_none()
     
@@ -355,7 +361,7 @@ async def get_items_by_category(
     query = (
         select(ResearchItem)
         .join(ResearchItem.categories)
-        .where(Category.id == category_obj.id)
+        .where(Category.id == category_obj.id, gemini_discovered_filter())
         .order_by(desc(ResearchItem.published_date))
     )
     

@@ -189,7 +189,7 @@ export function Dashboard() {
             disabled={refreshMutation.isPending}
           >
             <RefreshCcw className="h-4 w-4 mr-2" />
-            Refresh all sources
+            Refresh Gemini feeds
           </Button>
           <Button
             variant="ghost"
@@ -250,10 +250,10 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Database className="h-5 w-5 text-primary" />
-              Source Refresh Status
+              Feed Refresh Status
             </CardTitle>
             <CardDescription>
-              Check whether your daily sources are populated and trigger refreshes when needed.
+              Check whether your Gemini-driven category feeds are populated and trigger refreshes when needed.
             </CardDescription>
           </CardHeader>
           <CardContent>
