@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { 
@@ -18,7 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getDashboardStats, getIngestionStatus, triggerCategoryIngestion, triggerIngestion } from '@/lib/api';
 import { toast } from 'sonner';
-import type { ResearchItemBrief } from '@/types';
+import type { IngestionRunResult, ResearchItemBrief } from '@/types';
 
 function StatCard({ 
   title, 
@@ -117,6 +118,7 @@ function Section({
 
 export function Dashboard() {
   const queryClient = useQueryClient();
+  const [lastRun, setLastRun] = useState<{ label: string; result?: IngestionRunResult } | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: () => getDashboardStats(),
@@ -129,8 +131,15 @@ export function Dashboard() {
   const refreshMutation = useMutation({
     mutationFn: (source?: string) => triggerIngestion(source),
     onSuccess: (result) => {
-      toast.success(result.message);
+      setLastRun({
+        label: sourceLabel(undefined),
+        result: result.result,
+      });
+      toast.success(buildToastMessage(result.message, result.result));
       queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['category-feed'] });
+      queryClient.invalidateQueries({ queryKey: ['research-items'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to trigger refresh');
@@ -138,8 +147,12 @@ export function Dashboard() {
   });
   const refreshCategoryMutation = useMutation({
     mutationFn: (categorySlug: string) => triggerCategoryIngestion('gemini', categorySlug),
-    onSuccess: (result) => {
-      toast.success(result.message);
+    onSuccess: (result, categorySlug) => {
+      setLastRun({
+        label: sourceLabel(categorySlug),
+        result: result.result,
+      });
+      toast.success(buildToastMessage(result.message, result.result));
       queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       queryClient.invalidateQueries({ queryKey: ['category-feed'] });
@@ -257,6 +270,51 @@ export function Dashboard() {
           </div>
         </CardContent>
       </Card>
+
+      {lastRun && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Last Refresh Result</CardTitle>
+            <CardDescription>{lastRun.label}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-3 md:grid-cols-4">
+              <div>
+                <div className="text-2xl font-bold">{lastRun.result?.ingested ?? 0}</div>
+                <div className="text-sm text-muted-foreground">Ingested</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold">{lastRun.result?.updated ?? 0}</div>
+                <div className="text-sm text-muted-foreground">Updated</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold">{lastRun.result?.skipped ?? 0}</div>
+                <div className="text-sm text-muted-foreground">Skipped</div>
+              </div>
+              <div>
+                <div className="text-sm font-medium">{lastRun.result?.batch_id || 'No batch id'}</div>
+                <div className="text-sm text-muted-foreground">Batch</div>
+              </div>
+            </div>
+            {lastRun.result?.error && (
+              <p className="text-sm text-red-600">{lastRun.result.error}</p>
+            )}
+            {lastRun.result?.categories && lastRun.result.categories.length > 0 && (
+              <div className="grid gap-3 md:grid-cols-2">
+                {lastRun.result.categories.map((category) => (
+                  <div key={category.category} className="rounded-md border p-3 text-sm space-y-1">
+                    <div className="font-medium">{category.category}</div>
+                    <div className="text-muted-foreground">
+                      Received {category.received}, ingested {category.ingested}, updated {category.updated}, skipped {category.skipped}
+                    </div>
+                    {category.error && <div className="text-red-600">{category.error}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -420,4 +478,13 @@ export function Dashboard() {
       </div>
     </div>
   );
+}
+
+function sourceLabel(categorySlug?: string) {
+  return categorySlug ? `Gemini category refresh for ${categorySlug}` : 'Gemini full refresh';
+}
+
+function buildToastMessage(message: string, result?: IngestionRunResult) {
+  if (!result) return message;
+  return `${message} | ingested ${result.ingested ?? 0}, updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}`;
 }

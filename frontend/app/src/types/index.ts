@@ -235,6 +235,25 @@ export interface GeminiDiscoveryStatus {
   categories: GeminiCategoryStatus[];
 }
 
+export interface GeminiRunCategoryResult {
+  category: string;
+  received: number;
+  ingested: number;
+  updated: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface IngestionRunResult {
+  source?: string;
+  ingested?: number;
+  updated?: number;
+  skipped?: number;
+  batch_id?: string;
+  error?: string;
+  categories?: GeminiRunCategoryResult[];
+}
+
 export interface FilterOptions {
   search?: string;
   category?: string;

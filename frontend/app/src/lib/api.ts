@@ -10,6 +10,7 @@ import type {
   UserItem,
   IngestionSourceStatus,
   GeminiDiscoveryStatus,
+  IngestionRunResult,
   FilterOptions,
   CategoryFeedResponse,
 } from '@/types';
@@ -231,6 +232,7 @@ export async function triggerIngestion(source?: string): Promise<{
   success: boolean;
   message: string;
   timestamp: string;
+  result?: IngestionRunResult;
 }> {
   const params = new URLSearchParams();
   if (source) params.append('source', source);
@@ -242,6 +244,7 @@ export async function triggerCategoryIngestion(source: string, categorySlug: str
   success: boolean;
   message: string;
   timestamp: string;
+  result?: IngestionRunResult;
 }> {
   const params = new URLSearchParams();
   params.append('source', source);

@@ -80,13 +80,13 @@ async def trigger_ingestion(
     """Trigger manual ingestion."""
     if source:
         if source == "arxiv":
-            background_tasks.add_task(_run_source_ingestion, "arxiv")
+            result = await _run_source_ingestion("arxiv")
         elif source == "github":
-            background_tasks.add_task(_run_source_ingestion, "github")
+            result = await _run_source_ingestion("github")
         elif source == "paperswithcode":
-            background_tasks.add_task(_run_source_ingestion, "paperswithcode")
+            result = await _run_source_ingestion("paperswithcode")
         elif source == "gemini":
-            background_tasks.add_task(_run_source_ingestion, "gemini", category_slug)
+            result = await _run_source_ingestion("gemini", category_slug)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
         
@@ -98,15 +98,15 @@ async def trigger_ingestion(
                 else f"Ingestion triggered for {source}"
             ),
             "timestamp": datetime.utcnow().isoformat(),
+            "result": result.get("result"),
         }
     else:
-        # Trigger all sources
-        background_tasks.add_task(_run_full_ingestion)
-        
+        result = await _run_full_ingestion()
         return {
             "success": True,
-            "message": "Full ingestion triggered for all sources",
+            "message": "Full ingestion completed",
             "timestamp": datetime.utcnow().isoformat(),
+            "result": result.get("result"),
         }
 
 
