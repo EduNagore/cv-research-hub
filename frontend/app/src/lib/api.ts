@@ -24,17 +24,40 @@ async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Network error while contacting the backend';
+    throw new Error(`Request to ${endpoint} failed: ${message}`);
+  }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
-    throw new Error(error.message || `HTTP error! status: ${response.status}`);
+    const bodyText = await response.text().catch(() => '');
+    let errorJson: Record<string, unknown> | null = null;
+    try {
+      errorJson = bodyText ? JSON.parse(bodyText) as Record<string, unknown> : null;
+    } catch {
+      errorJson = null;
+    }
+    const errorText =
+      (typeof errorJson?.message === 'string' && errorJson.message) ||
+      (typeof errorJson?.detail === 'string' && errorJson.detail) ||
+      null;
+    throw new Error(
+      errorText ||
+      bodyText ||
+      `Request to ${endpoint} failed with HTTP ${response.status}`
+    );
   }
 
   return response.json();
