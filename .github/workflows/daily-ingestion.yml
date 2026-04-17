@@ -1,0 +1,23 @@
+name: Daily Ingestion
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-ingestion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger full ingestion
+        env:
+          INGESTION_TRIGGER_URL: ${{ secrets.INGESTION_TRIGGER_URL }}
+        run: |
+          if [ -z "$INGESTION_TRIGGER_URL" ]; then
+            echo "INGESTION_TRIGGER_URL secret is not set."
+            exit 1
+          fi
+
+          curl --fail --show-error --silent \
+            -X POST \
+            "$INGESTION_TRIGGER_URL"
