@@ -164,7 +164,6 @@ class GeminiDiscoveryService:
             ],
             "tools": [{"google_search": {}}],
             "generationConfig": {
-                "responseMimeType": "application/json",
                 "temperature": 0.2,
             },
         }
