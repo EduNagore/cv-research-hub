@@ -169,7 +169,7 @@ class GeminiDiscoveryService:
             },
         }
 
-        response = await self._post_with_retry(client, payload)
+        response = await self._post_with_retry(client, payload, settings.GEMINI_MODEL)
         data = response.json()
 
         text = self._extract_text_response(data)
@@ -227,13 +227,18 @@ class GeminiDiscoveryService:
 
         return "\n".join(text_chunks).strip()
 
-    async def _post_with_retry(self, client: httpx.AsyncClient, payload: Dict[str, Any]) -> httpx.Response:
+    async def _post_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        payload: Dict[str, Any],
+        model_name: str,
+    ) -> httpx.Response:
         """Post to Gemini with retry and backoff for quota/rate-limit errors."""
         last_error: Optional[Exception] = None
         for attempt in range(settings.GEMINI_MAX_RETRIES + 1):
             try:
                 response = await client.post(
-                    self.API_URL_TEMPLATE.format(model=settings.GEMINI_MODEL),
+                    self.API_URL_TEMPLATE.format(model=model_name),
                     headers={"x-goog-api-key": settings.GEMINI_API_KEY},
                     json=payload,
                 )
@@ -255,7 +260,14 @@ class GeminiDiscoveryService:
                     raise ValueError(f"Gemini API transport error: {exc}") from exc
                 await asyncio.sleep(self._compute_retry_delay(attempt, None))
 
-        raise ValueError(f"Gemini API request failed after retries: {last_error}")
+        if (
+            model_name == settings.GEMINI_MODEL
+            and settings.GEMINI_FALLBACK_MODEL
+            and settings.GEMINI_FALLBACK_MODEL != settings.GEMINI_MODEL
+        ):
+            return await self._post_with_retry(client, payload, settings.GEMINI_FALLBACK_MODEL)
+
+        raise ValueError(f"Gemini API request failed after retries using model {model_name}: {last_error}")
 
     def _compute_retry_delay(self, attempt: int, retry_after: Optional[str]) -> float:
         """Compute delay before retrying Gemini requests."""

@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     HUGGINGFACE_TOKEN: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_FALLBACK_MODEL: Optional[str] = "gemini-2.5-flash-lite"
     GEMINI_RESULTS_PER_CATEGORY: int = 3
     GEMINI_LOOKBACK_DAYS: int = 7
     GEMINI_ENABLE_FULL_REFRESH: bool = True
