@@ -12,9 +12,15 @@ jobs:
       - name: Trigger full ingestion
         env:
           INGESTION_TRIGGER_URL: ${{ secrets.INGESTION_TRIGGER_URL }}
+          INGESTION_TRIGGER_TOKEN: ${{ secrets.INGESTION_TRIGGER_TOKEN }}
         run: |
           if [ -z "$INGESTION_TRIGGER_URL" ]; then
             echo "INGESTION_TRIGGER_URL secret is not set."
+            exit 1
+          fi
+
+          if [ -z "$INGESTION_TRIGGER_TOKEN" ]; then
+            echo "INGESTION_TRIGGER_TOKEN secret is not set."
             exit 1
           fi
 
@@ -22,6 +28,7 @@ jobs:
           status_code=$(curl --show-error --silent \
             --output "$response_file" \
             --write-out "%{http_code}" \
+            -H "X-Ingestion-Token: $INGESTION_TRIGGER_TOKEN" \
             -X POST \
             "$INGESTION_TRIGGER_URL")
 

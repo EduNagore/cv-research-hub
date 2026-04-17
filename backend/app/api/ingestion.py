@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,15 @@ from app.services.ingestion_runner import run_ingestion_job
 router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+def _validate_ingestion_token(x_ingestion_token: Optional[str]) -> None:
+    """Require a shared secret for ingestion-mutating endpoints when configured."""
+    expected_token = settings.INGESTION_TRIGGER_TOKEN
+    if not expected_token:
+        return
+    if x_ingestion_token != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid ingestion trigger token")
 
 
 async def _run_source_ingestion(
@@ -113,9 +122,11 @@ async def trigger_ingestion(
     category_slug: Optional[str] = None,
     wait: bool = False,
     reset_gemini: bool = False,
+    x_ingestion_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger manual ingestion."""
+    _validate_ingestion_token(x_ingestion_token)
     try:
         if source:
             if source == "arxiv":
@@ -280,9 +291,11 @@ async def get_ingestion_status(
 @router.post("/refresh-github-metadata")
 async def refresh_github_metadata(
     background_tasks: BackgroundTasks,
+    x_ingestion_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """Refresh GitHub metadata for all items."""
+    _validate_ingestion_token(x_ingestion_token)
     background_tasks.add_task(_run_refresh_github_metadata)
     
     return {
@@ -295,9 +308,11 @@ async def refresh_github_metadata(
 @router.post("/recalculate-scores")
 async def recalculate_scores(
     background_tasks: BackgroundTasks,
+    x_ingestion_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """Recalculate relevance scores for all items."""
+    _validate_ingestion_token(x_ingestion_token)
     background_tasks.add_task(_run_recalculate_scores)
     
     return {

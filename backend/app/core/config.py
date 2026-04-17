@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "info"
     SECRET_KEY: Optional[str] = None
     PUBLIC_BASE_URL: Optional[str] = None
+    INGESTION_TRIGGER_TOKEN: Optional[str] = None
     
     # API
     API_V1_PREFIX: str = "/api/v1"
