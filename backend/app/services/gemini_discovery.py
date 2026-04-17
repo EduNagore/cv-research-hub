@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -19,6 +19,8 @@ from app.models.research_item import (
     ResearchItem,
     SourceType,
     StatusLabel,
+    research_item_categories,
+    research_item_tags,
 )
 from app.models.tag import Tag
 from app.services.classification import ClassificationService
@@ -453,6 +455,18 @@ class GeminiDiscoveryService:
         category_names: List[str],
         tag_names: List[str],
     ) -> None:
+        if item.id is None:
+            await self.db.flush()
+
+        existing_category_ids = set(
+            (
+                await self.db.execute(
+                    select(research_item_categories.c.category_id).where(
+                        research_item_categories.c.research_item_id == item.id
+                    )
+                )
+            ).scalars().all()
+        )
         for category_name in dict.fromkeys(category_names):
             result = await self.db.execute(
                 select(Category).where(
@@ -463,10 +477,25 @@ class GeminiDiscoveryService:
                 )
             )
             matched_category = result.scalar_one_or_none()
-            if matched_category and matched_category not in item.categories:
-                item.categories.append(matched_category)
+            if matched_category and matched_category.id not in existing_category_ids:
+                await self.db.execute(
+                    insert(research_item_categories).values(
+                        research_item_id=item.id,
+                        category_id=matched_category.id,
+                    )
+                )
                 matched_category.item_count += 1
+                existing_category_ids.add(matched_category.id)
 
+        existing_tag_ids = set(
+            (
+                await self.db.execute(
+                    select(research_item_tags.c.tag_id).where(
+                        research_item_tags.c.research_item_id == item.id
+                    )
+                )
+            ).scalars().all()
+        )
         for tag_name in dict.fromkeys(tag_names):
             normalized = tag_name.strip()
             if not normalized:
@@ -483,6 +512,12 @@ class GeminiDiscoveryService:
                 self.db.add(tag)
                 await self.db.flush()
 
-            if tag not in item.tags:
-                item.tags.append(tag)
+            if tag.id not in existing_tag_ids:
+                await self.db.execute(
+                    insert(research_item_tags).values(
+                        research_item_id=item.id,
+                        tag_id=tag.id,
+                    )
+                )
                 tag.item_count += 1
+                existing_tag_ids.add(tag.id)
