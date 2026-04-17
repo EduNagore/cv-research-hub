@@ -1,4 +1,5 @@
 """Ingestion API routes."""
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -17,10 +18,12 @@ from app.services.ingestion_runner import run_ingestion_job
 
 router = APIRouter()
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 async def _run_source_ingestion(source: str, category_slug: Optional[str] = None) -> dict:
     """Run a source-specific ingestion task with its own DB session."""
+    logger.info("Starting source ingestion", extra={"source": source, "category_slug": category_slug})
     async with AsyncSessionLocal() as session:
         service = IngestionService(session)
         if source == "arxiv":
@@ -38,6 +41,7 @@ async def _run_source_ingestion(source: str, category_slug: Optional[str] = None
         else:
             raise ValueError(f"Unknown source: {source}")
         await session.commit()
+        logger.info("Completed source ingestion", extra={"source": source, "category_slug": category_slug})
         return {
             "success": True,
             "job": source,
@@ -48,6 +52,7 @@ async def _run_source_ingestion(source: str, category_slug: Optional[str] = None
 
 async def _run_full_ingestion() -> dict:
     """Run the full ingestion pipeline in its own DB session."""
+    logger.info("Starting full ingestion")
     if not settings.GEMINI_ENABLE_FULL_REFRESH:
         return {
             "success": True,
@@ -61,10 +66,23 @@ async def _run_full_ingestion() -> dict:
                 "error": "Full Gemini refresh is disabled.",
             },
         }
-    return await run_ingestion_job(
+    result = await run_ingestion_job(
         lambda service: service.run_full_ingestion(),
         job_name="full_ingestion",
     )
+    logger.info("Completed full ingestion")
+    return result
+
+
+async def _run_background_job(job_name: str, func, *args) -> None:
+    """Run a background ingestion job with logging."""
+    try:
+        logger.info("Background job started", extra={"job_name": job_name})
+        await func(*args)
+        logger.info("Background job completed", extra={"job_name": job_name})
+    except Exception:
+        logger.exception("Background job failed", extra={"job_name": job_name})
+        raise
 
 
 async def _run_refresh_github_metadata() -> dict:
@@ -88,6 +106,7 @@ async def trigger_ingestion(
     background_tasks: BackgroundTasks,
     source: Optional[str] = None,
     category_slug: Optional[str] = None,
+    wait: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger manual ingestion."""
@@ -110,8 +129,8 @@ async def trigger_ingestion(
                         status_code=400,
                         detail="Category refresh is disabled. The site refreshes automatically once per day.",
                     )
-                if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH:
-                    background_tasks.add_task(_run_source_ingestion, "gemini", None)
+                if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH and not wait:
+                    background_tasks.add_task(_run_background_job, "gemini_full_refresh", _run_source_ingestion, "gemini", None)
                     return {
                         "success": True,
                         "message": "Full Gemini refresh started in background",
@@ -132,8 +151,8 @@ async def trigger_ingestion(
                 "result": result.get("result"),
             }
         else:
-            if settings.GEMINI_ENABLE_FULL_REFRESH:
-                background_tasks.add_task(_run_full_ingestion)
+            if settings.GEMINI_ENABLE_FULL_REFRESH and not wait:
+                background_tasks.add_task(_run_background_job, "full_ingestion", _run_full_ingestion)
                 return {
                     "success": True,
                     "message": "Full ingestion started in background",
