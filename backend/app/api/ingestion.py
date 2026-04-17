@@ -91,57 +91,73 @@ async def trigger_ingestion(
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger manual ingestion."""
-    if source:
-        if source == "arxiv":
-            result = await _run_source_ingestion("arxiv")
-        elif source == "github":
-            result = await _run_source_ingestion("github")
-        elif source == "paperswithcode":
-            result = await _run_source_ingestion("paperswithcode")
-        elif source == "gemini":
-            if not settings.GEMINI_ENABLE_MANUAL_REFRESH:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Manual Gemini refresh is disabled. The site refreshes automatically once per day.",
-                )
-            if category_slug and not settings.GEMINI_ENABLE_CATEGORY_REFRESH:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Category refresh is disabled. The site refreshes automatically once per day.",
-                )
-            if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH:
-                background_tasks.add_task(_run_source_ingestion, "gemini", None)
+    try:
+        if source:
+            if source == "arxiv":
+                result = await _run_source_ingestion("arxiv")
+            elif source == "github":
+                result = await _run_source_ingestion("github")
+            elif source == "paperswithcode":
+                result = await _run_source_ingestion("paperswithcode")
+            elif source == "gemini":
+                if not settings.GEMINI_ENABLE_MANUAL_REFRESH:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Manual Gemini refresh is disabled. The site refreshes automatically once per day.",
+                    )
+                if category_slug and not settings.GEMINI_ENABLE_CATEGORY_REFRESH:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Category refresh is disabled. The site refreshes automatically once per day.",
+                    )
+                if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH:
+                    background_tasks.add_task(_run_source_ingestion, "gemini", None)
+                    return {
+                        "success": True,
+                        "message": "Full Gemini refresh started in background",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                result = await _run_source_ingestion("gemini", category_slug)
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+            
+            return {
+                "success": True,
+                "message": (
+                    f"Ingestion triggered for {source} category {category_slug}"
+                    if source == "gemini" and category_slug
+                    else f"Ingestion triggered for {source}"
+                ),
+                "timestamp": datetime.utcnow().isoformat(),
+                "result": result.get("result"),
+            }
+        else:
+            if settings.GEMINI_ENABLE_FULL_REFRESH:
+                background_tasks.add_task(_run_full_ingestion)
                 return {
                     "success": True,
-                    "message": "Full Gemini refresh started in background",
+                    "message": "Full ingestion started in background",
                     "timestamp": datetime.utcnow().isoformat(),
                 }
-            result = await _run_source_ingestion("gemini", category_slug)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
-        
-        return {
-            "success": True,
-            "message": (
-                f"Ingestion triggered for {source} category {category_slug}"
-                if source == "gemini" and category_slug
-                else f"Ingestion triggered for {source}"
-            ),
-            "timestamp": datetime.utcnow().isoformat(),
-            "result": result.get("result"),
-        }
-    else:
-        result = await _run_full_ingestion()
-        return {
-            "success": True,
-            "message": (
-                "Full ingestion completed"
-                if settings.GEMINI_ENABLE_FULL_REFRESH
-                else "Full Gemini refresh is disabled."
-            ),
-            "timestamp": datetime.utcnow().isoformat(),
-            "result": result.get("result"),
-        }
+
+            result = await _run_full_ingestion()
+            return {
+                "success": True,
+                "message": (
+                    "Full ingestion completed"
+                    if settings.GEMINI_ENABLE_FULL_REFRESH
+                    else "Full Gemini refresh is disabled."
+                ),
+                "timestamp": datetime.utcnow().isoformat(),
+                "result": result.get("result"),
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ingestion failed: {exc}",
+        ) from exc
 
 
 @router.get("/status")

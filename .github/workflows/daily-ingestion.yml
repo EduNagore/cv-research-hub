@@ -18,6 +18,17 @@ jobs:
             exit 1
           fi
 
-          curl --fail --show-error --silent \
+          response_file="$(mktemp)"
+          status_code=$(curl --show-error --silent \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
             -X POST \
-            "$INGESTION_TRIGGER_URL"
+            "$INGESTION_TRIGGER_URL")
+
+          cat "$response_file"
+          echo
+
+          if [ "$status_code" -ge 400 ]; then
+            echo "Request failed with HTTP $status_code"
+            exit 1
+          fi
