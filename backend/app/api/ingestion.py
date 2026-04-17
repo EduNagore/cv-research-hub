@@ -21,7 +21,12 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-async def _run_source_ingestion(source: str, category_slug: Optional[str] = None) -> dict:
+async def _run_source_ingestion(
+    source: str,
+    category_slug: Optional[str] = None,
+    *,
+    reset_gemini: bool = False,
+) -> dict:
     """Run a source-specific ingestion task with its own DB session."""
     logger.info("Starting source ingestion", extra={"source": source, "category_slug": category_slug})
     async with AsyncSessionLocal() as session:
@@ -36,7 +41,7 @@ async def _run_source_ingestion(source: str, category_slug: Optional[str] = None
             result = (
                 await service.ingest_gemini_category(category_slug)
                 if category_slug
-                else await service.ingest_gemini_discovery()
+                else await service.ingest_gemini_discovery(reset_existing=reset_gemini)
             )
         else:
             raise ValueError(f"Unknown source: {source}")
@@ -50,7 +55,7 @@ async def _run_source_ingestion(source: str, category_slug: Optional[str] = None
         }
 
 
-async def _run_full_ingestion() -> dict:
+async def _run_full_ingestion(*, reset_gemini: bool = False) -> dict:
     """Run the full ingestion pipeline in its own DB session."""
     logger.info("Starting full ingestion")
     if not settings.GEMINI_ENABLE_FULL_REFRESH:
@@ -67,18 +72,18 @@ async def _run_full_ingestion() -> dict:
             },
         }
     result = await run_ingestion_job(
-        lambda service: service.run_full_ingestion(),
+        lambda service: service.run_full_ingestion(reset_gemini=reset_gemini),
         job_name="full_ingestion",
     )
     logger.info("Completed full ingestion")
     return result
 
 
-async def _run_background_job(job_name: str, func, *args) -> None:
+async def _run_background_job(job_name: str, func, *args, **kwargs) -> None:
     """Run a background ingestion job with logging."""
     try:
         logger.info("Background job started", extra={"job_name": job_name})
-        await func(*args)
+        await func(*args, **kwargs)
         logger.info("Background job completed", extra={"job_name": job_name})
     except Exception:
         logger.exception("Background job failed", extra={"job_name": job_name})
@@ -107,6 +112,7 @@ async def trigger_ingestion(
     source: Optional[str] = None,
     category_slug: Optional[str] = None,
     wait: bool = False,
+    reset_gemini: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger manual ingestion."""
@@ -130,13 +136,20 @@ async def trigger_ingestion(
                         detail="Category refresh is disabled. The site refreshes automatically once per day.",
                     )
                 if not category_slug and settings.GEMINI_ENABLE_FULL_REFRESH and not wait:
-                    background_tasks.add_task(_run_background_job, "gemini_full_refresh", _run_source_ingestion, "gemini", None)
+                    background_tasks.add_task(
+                        _run_background_job,
+                        "gemini_full_refresh",
+                        _run_source_ingestion,
+                        "gemini",
+                        None,
+                        reset_gemini=reset_gemini,
+                    )
                     return {
                         "success": True,
                         "message": "Full Gemini refresh started in background",
                         "timestamp": datetime.utcnow().isoformat(),
                     }
-                result = await _run_source_ingestion("gemini", category_slug)
+                result = await _run_source_ingestion("gemini", category_slug, reset_gemini=reset_gemini)
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
             
@@ -152,14 +165,19 @@ async def trigger_ingestion(
             }
         else:
             if settings.GEMINI_ENABLE_FULL_REFRESH and not wait:
-                background_tasks.add_task(_run_background_job, "full_ingestion", _run_full_ingestion)
+                background_tasks.add_task(
+                    _run_background_job,
+                    "full_ingestion",
+                    _run_full_ingestion,
+                    reset_gemini=reset_gemini,
+                )
                 return {
                     "success": True,
                     "message": "Full ingestion started in background",
                     "timestamp": datetime.utcnow().isoformat(),
                 }
 
-            result = await _run_full_ingestion()
+            result = await _run_full_ingestion(reset_gemini=reset_gemini)
             return {
                 "success": True,
                 "message": (

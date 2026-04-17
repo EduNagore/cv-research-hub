@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -20,8 +20,11 @@ from app.models.research_item import (
     ResearchItem,
     SourceType,
     StatusLabel,
+    research_item_categories,
+    research_item_tags,
 )
 from app.models.tag import Tag
+from app.models.user_item import UserItem
 from app.services.classification import ClassificationService
 from app.services.gemini_discovery import GeminiDiscoveryService
 from app.services.scoring import ScoringService
@@ -38,11 +41,17 @@ class IngestionService:
         self.scoring_service = ScoringService()
         self.batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     
-    async def run_full_ingestion(self) -> Dict:
+    async def run_full_ingestion(self, *, reset_gemini: bool = False) -> Dict:
         """Run the Gemini-driven ingestion flow."""
+        reset_result = None
+        if reset_gemini:
+            reset_result = await self.clear_gemini_items()
+
         results = {
             "gemini_discovery": await self.ingest_gemini_discovery(),
         }
+        if reset_result is not None:
+            results["gemini_reset"] = reset_result
         
         # Post-processing
         await self.deduplicate_items()
@@ -50,8 +59,10 @@ class IngestionService:
         
         return results
 
-    async def ingest_gemini_discovery(self) -> Dict:
+    async def ingest_gemini_discovery(self, *, reset_existing: bool = False) -> Dict:
         """Discover recent items with Gemini and store them as research items."""
+        if reset_existing:
+            await self.clear_gemini_items()
         service = GeminiDiscoveryService(self.db, batch_id=self.batch_id)
         result = await service.run_daily_discovery()
         await self.db.commit()
@@ -63,6 +74,64 @@ class IngestionService:
         result = await service.run_category_discovery(category_slug)
         await self.db.commit()
         return result
+
+    async def clear_gemini_items(self) -> Dict:
+        """Delete only Gemini-discovered items and refresh related counts."""
+        gemini_ids = (
+            await self.db.execute(
+                select(ResearchItem.id).where(ResearchItem.source_id.ilike("gemini_%"))
+            )
+        ).scalars().all()
+
+        if not gemini_ids:
+            return {"deleted_items": 0}
+
+        await self.db.execute(delete(UserItem).where(UserItem.research_item_id.in_(gemini_ids)))
+        await self.db.execute(
+            delete(research_item_categories).where(
+                research_item_categories.c.research_item_id.in_(gemini_ids)
+            )
+        )
+        await self.db.execute(
+            delete(research_item_tags).where(
+                research_item_tags.c.research_item_id.in_(gemini_ids)
+            )
+        )
+        await self.db.execute(delete(ResearchItem).where(ResearchItem.id.in_(gemini_ids)))
+
+        await self._refresh_item_counts()
+        await self.db.flush()
+        return {"deleted_items": len(gemini_ids)}
+
+    async def _refresh_item_counts(self) -> None:
+        """Refresh category and tag item counters from association tables."""
+        category_counts = dict(
+            (
+                await self.db.execute(
+                    select(
+                        research_item_categories.c.category_id,
+                        func.count(research_item_categories.c.research_item_id),
+                    ).group_by(research_item_categories.c.category_id)
+                )
+            ).all()
+        )
+        categories = (await self.db.execute(select(Category))).scalars().all()
+        for category in categories:
+            category.item_count = category_counts.get(category.id, 0)
+
+        tag_counts = dict(
+            (
+                await self.db.execute(
+                    select(
+                        research_item_tags.c.tag_id,
+                        func.count(research_item_tags.c.research_item_id),
+                    ).group_by(research_item_tags.c.tag_id)
+                )
+            ).all()
+        )
+        tags = (await self.db.execute(select(Tag))).scalars().all()
+        for tag in tags:
+            tag.item_count = tag_counts.get(tag.id, 0)
     
     async def ingest_arxiv(self, days_back: int = 7) -> Dict:
         """Ingest papers from arXiv."""
