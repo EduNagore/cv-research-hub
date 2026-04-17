@@ -222,22 +222,55 @@ class GeminiDiscoveryService:
         if not candidates:
             raise ValueError("Gemini returned no candidates")
 
+        for candidate in candidates:
+            parts = candidate.get("content", {}).get("parts", [])
+            text_chunks = []
+            for part in parts:
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_chunks.append(text.strip())
+
+            if text_chunks:
+                return "\n".join(text_chunks).strip()
+
+            grounded_text = self._extract_grounded_text(candidate)
+            if grounded_text:
+                return grounded_text
+
         candidate = candidates[0]
-        parts = candidate.get("content", {}).get("parts", [])
-        text_chunks = []
-        for part in parts:
-            text = part.get("text")
-            if isinstance(text, str) and text.strip():
-                text_chunks.append(text.strip())
+        finish_reason = candidate.get("finishReason")
+        raise ValueError(
+            "Gemini returned no text content. "
+            f"finishReason={finish_reason!r}, candidate_keys={list(candidate.keys())}"
+        )
 
-        if not text_chunks:
-            finish_reason = candidate.get("finishReason")
-            raise ValueError(
-                "Gemini returned no text content. "
-                f"finishReason={finish_reason!r}, candidate_keys={list(candidate.keys())}"
-            )
+    def _extract_grounded_text(self, candidate: Dict[str, Any]) -> str:
+        """Reconstruct grounded text when Gemini omits plain content text parts."""
+        grounding_metadata = candidate.get("groundingMetadata") or {}
+        supports = grounding_metadata.get("groundingSupports") or []
+        if not isinstance(supports, list):
+            return ""
 
-        return "\n".join(text_chunks).strip()
+        ordered_segments = []
+        seen_segments = set()
+        for support in sorted(
+            (support for support in supports if isinstance(support, dict)),
+            key=lambda support: (
+                (support.get("segment") or {}).get("partIndex", 0),
+                (support.get("segment") or {}).get("startIndex", 0),
+            ),
+        ):
+            segment = support.get("segment") or {}
+            text = segment.get("text")
+            if not isinstance(text, str):
+                continue
+            cleaned = text.strip()
+            if not cleaned or cleaned in seen_segments:
+                continue
+            seen_segments.add(cleaned)
+            ordered_segments.append(cleaned)
+
+        return " ".join(ordered_segments).strip()
 
     async def _post_with_retry(
         self,
