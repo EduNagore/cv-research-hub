@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.research_item import ResearchItem, ContributionType, StatusLabel
 from app.schemas.dashboard import DashboardStats, DailySummary, CategoryCount, TopItemBrief
-from app.services.content_filters import gemini_discovered_filter
+from app.services.content_filters import get_preferred_content_filter
 
 router = APIRouter()
 
@@ -28,36 +28,36 @@ async def get_dashboard_stats(
     today_end = today_start + timedelta(days=1)
     week_ago = today_start - timedelta(days=7)
     month_ago = today_start - timedelta(days=30)
-    gemini_filter = gemini_discovered_filter()
+    item_filter, _ = await get_preferred_content_filter(db)
     
     # Get total counts
-    total_result = await db.execute(select(func.count(ResearchItem.id)).where(gemini_filter))
+    total_result = await db.execute(select(func.count(ResearchItem.id)).where(item_filter))
     total_items = total_result.scalar() or 0
-    latest_ingestion_result = await db.execute(select(func.max(ResearchItem.last_ingested_at)).where(gemini_filter))
+    latest_ingestion_result = await db.execute(select(func.max(ResearchItem.last_ingested_at)).where(item_filter))
     latest_ingestion_at = latest_ingestion_result.scalar_one_or_none()
     
     # Get counts by contribution type
     papers_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.PAPER)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.PAPER)
     )
     total_papers = papers_result.scalar() or 0
     
     models_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.MODEL)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.MODEL)
     )
     total_models = models_result.scalar() or 0
     
     datasets_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.DATASET)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.DATASET)
     )
     total_datasets = datasets_result.scalar() or 0
     
     repos_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.REPOSITORY)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.REPOSITORY)
     )
     total_repositories = repos_result.scalar() or 0
     
@@ -68,7 +68,7 @@ async def get_dashboard_stats(
             and_(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -77,13 +77,13 @@ async def get_dashboard_stats(
     # Get items from last 7 and 30 days
     items_7d_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.published_date >= week_ago)
+        .where(item_filter, ResearchItem.published_date >= week_ago)
     )
     items_last_7_days = items_7d_result.scalar() or 0
     
     items_30d_result = await db.execute(
         select(func.count(ResearchItem.id))
-        .where(gemini_filter, ResearchItem.published_date >= month_ago)
+        .where(item_filter, ResearchItem.published_date >= month_ago)
     )
     items_last_30_days = items_30d_result.scalar() or 0
     
@@ -103,7 +103,7 @@ async def get_dashboard_stats(
                 await db.execute(
                     select(func.count(ResearchItem.id))
                     .join(ResearchItem.categories)
-                    .where(Category.id == c.id, gemini_filter)
+                    .where(Category.id == c.id, item_filter)
                 )
             ).scalar()
             or 0,
@@ -119,7 +119,7 @@ async def get_dashboard_stats(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
                 ResearchItem.contribution_type == ContributionType.PAPER,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -132,7 +132,7 @@ async def get_dashboard_stats(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
                 ResearchItem.contribution_type == ContributionType.MODEL,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -145,7 +145,7 @@ async def get_dashboard_stats(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
                 ResearchItem.contribution_type == ContributionType.DATASET,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -158,7 +158,7 @@ async def get_dashboard_stats(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
                 ResearchItem.contribution_type == ContributionType.BENCHMARK,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -182,7 +182,7 @@ async def get_dashboard_stats(
             and_(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
-                gemini_filter,
+                item_filter,
             )
         )
         .order_by(ResearchItem.relevance_score.desc())
@@ -207,7 +207,7 @@ async def get_dashboard_stats(
     # Get most promising papers (high relevance, recent)
     promising_result = await db.execute(
         select(ResearchItem)
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.PAPER)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.PAPER)
         .order_by(ResearchItem.relevance_score.desc())
         .limit(10)
     )
@@ -230,7 +230,7 @@ async def get_dashboard_stats(
     # Get useful repositories (has GitHub, good stars)
     repos_query_result = await db.execute(
         select(ResearchItem)
-        .where(gemini_filter, ResearchItem.github_url.isnot(None))
+        .where(item_filter, ResearchItem.github_url.isnot(None))
         .order_by(ResearchItem.github_stars.desc().nullslast())
         .limit(10)
     )
@@ -253,7 +253,7 @@ async def get_dashboard_stats(
     # Get new architectures/models
     arch_result = await db.execute(
         select(ResearchItem)
-        .where(gemini_filter, ResearchItem.contribution_type == ContributionType.MODEL)
+        .where(item_filter, ResearchItem.contribution_type == ContributionType.MODEL)
         .order_by(ResearchItem.published_date.desc())
         .limit(10)
     )
@@ -277,7 +277,7 @@ async def get_dashboard_stats(
     bench_result = await db.execute(
         select(ResearchItem)
         .where(
-            gemini_filter,
+            item_filter,
             ResearchItem.contribution_type.in_([
                 ContributionType.BENCHMARK,
                 ContributionType.DATASET,
@@ -306,7 +306,7 @@ async def get_dashboard_stats(
     worth_result = await db.execute(
         select(ResearchItem)
         .where(
-            gemini_filter,
+            item_filter,
             ResearchItem.status_label.in_([
                 StatusLabel.TRENDING,
                 StatusLabel.USEFUL_FOR_RESEARCH,
@@ -337,7 +337,7 @@ async def get_dashboard_stats(
     for source in SourceType:
         count_result = await db.execute(
             select(func.count(ResearchItem.id))
-            .where(gemini_filter, ResearchItem.source == source)
+            .where(item_filter, ResearchItem.source == source)
         )
         source_breakdown[source.value] = count_result.scalar() or 0
     
@@ -372,7 +372,7 @@ async def get_daily_summary(
     
     today_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
-    gemini_filter = gemini_discovered_filter()
+    item_filter, _ = await get_preferred_content_filter(db)
     
     # Get today's new items count
     today_items_result = await db.execute(
@@ -381,7 +381,7 @@ async def get_daily_summary(
             and_(
                 ResearchItem.published_date >= today_start,
                 ResearchItem.published_date < today_end,
-                gemini_filter,
+                item_filter,
             )
         )
     )
@@ -397,7 +397,7 @@ async def get_daily_summary(
                     ResearchItem.published_date >= today_start,
                     ResearchItem.published_date < today_end,
                     ResearchItem.contribution_type == contrib_type,
-                    gemini_filter,
+                    item_filter,
                 )
             )
         )
@@ -419,7 +419,7 @@ async def get_daily_summary(
                 await db.execute(
                     select(func.count(ResearchItem.id))
                     .join(ResearchItem.categories)
-                    .where(Category.id == c.id, gemini_filter)
+                    .where(Category.id == c.id, item_filter)
                 )
             ).scalar()
             or 0,

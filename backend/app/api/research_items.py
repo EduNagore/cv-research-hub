@@ -20,7 +20,7 @@ from app.schemas.research_item import (
     ResearchItemListResponse,
     ResearchItemResponse,
 )
-from app.services.content_filters import gemini_discovered_filter
+from app.services.content_filters import get_preferred_content_filter
 
 router = APIRouter()
 
@@ -62,7 +62,8 @@ async def list_research_items(
     db: AsyncSession = Depends(get_db),
 ) -> ResearchItemListResponse:
     """List research items with filtering."""
-    query = select(ResearchItem).where(gemini_discovered_filter())
+    item_filter, _ = await get_preferred_content_filter(db)
+    query = select(ResearchItem).where(item_filter)
     
     # Apply filters
     if search:
@@ -203,6 +204,7 @@ async def search_research_items(
     db: AsyncSession = Depends(get_db),
 ):
     """Search research items."""
+    _, using_gemini_content = await get_preferred_content_filter(db)
     # Use PostgreSQL full-text search
     from sqlalchemy import text
     
@@ -213,7 +215,7 @@ async def search_research_items(
                                         coalesce(short_summary, '')),
                    plainto_tsquery('english', :query)) as rank
     FROM research_items
-    WHERE source_id LIKE 'gemini_%'
+    WHERE {("source_id LIKE 'gemini_%'" if using_gemini_content else "TRUE")}
       AND to_tsvector('english', coalesce(title, '') || ' ' || 
                                   coalesce(abstract, '') || ' ' || 
                                   coalesce(short_summary, ''))
@@ -249,7 +251,7 @@ async def search_research_items(
     count_query = f"""
     SELECT COUNT(*)
     FROM research_items
-    WHERE source_id LIKE 'gemini_%'
+    WHERE {("source_id LIKE 'gemini_%'" if using_gemini_content else "TRUE")}
       AND to_tsvector('english', coalesce(title, '') || ' ' || 
                                   coalesce(abstract, '') || ' ' || 
                                   coalesce(short_summary, ''))
@@ -288,10 +290,11 @@ async def get_research_item(
     db: AsyncSession = Depends(get_db),
 ) -> ResearchItemResponse:
     """Get a single research item by slug."""
+    item_filter, _ = await get_preferred_content_filter(db)
     result = await db.execute(
         select(ResearchItem).where(
             ResearchItem.slug == slug,
-            gemini_discovered_filter(),
+            item_filter,
         )
     )
     item = result.scalar_one_or_none()
@@ -347,6 +350,7 @@ async def get_items_by_category(
 ):
     """Get research items by category."""
     from app.models.category import Category
+    item_filter, _ = await get_preferred_content_filter(db)
     
     # Get category
     category_result = await db.execute(
@@ -361,7 +365,7 @@ async def get_items_by_category(
     query = (
         select(ResearchItem)
         .join(ResearchItem.categories)
-        .where(Category.id == category_obj.id, gemini_discovered_filter())
+        .where(Category.id == category_obj.id, item_filter)
         .order_by(desc(ResearchItem.published_date))
     )
     

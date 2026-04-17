@@ -61,6 +61,7 @@ export interface CategoryFeedGroup {
 
 export interface CategoryFeedResponse {
   generated_at: string;
+  uses_gemini_snapshot?: boolean;
   categories: CategoryFeedGroup[];
 }
 

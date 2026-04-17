@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: cv-research-hub-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers
+
+  - type: worker
+    name: cv-research-hub-worker
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: celery -A app.tasks.ingestion_tasks worker --loglevel=info --queues=ingestion,trends
+
+  - type: worker
+    name: cv-research-hub-beat
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: celery -A app.tasks.ingestion_tasks beat --loglevel=info

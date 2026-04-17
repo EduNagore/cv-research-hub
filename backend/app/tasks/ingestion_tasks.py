@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime
 
 from celery import Celery
+from celery.schedules import crontab
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -119,22 +120,22 @@ def generate_trends_task(self):
 celery_app.conf.beat_schedule = {
     "daily-ingestion": {
         "task": "app.tasks.ingestion_tasks.daily_ingestion_task",
-        "schedule": 86400.0,  # Daily
+        "schedule": crontab(hour=settings.DAILY_INGESTION_HOUR, minute=0),
         "options": {"queue": "ingestion"},
     },
     "refresh-github-metadata": {
         "task": "app.tasks.ingestion_tasks.refresh_github_metadata_task",
-        "schedule": 21600.0,  # Every 6 hours
+        "schedule": crontab(minute=0, hour=f"*/{settings.GITHUB_REFRESH_INTERVAL_HOURS}"),
         "options": {"queue": "ingestion"},
     },
     "recalculate-scores": {
         "task": "app.tasks.ingestion_tasks.recalculate_scores_task",
-        "schedule": 43200.0,  # Every 12 hours
+        "schedule": crontab(minute=30, hour="*/12"),
         "options": {"queue": "ingestion"},
     },
     "generate-trends": {
         "task": "app.tasks.ingestion_tasks.generate_trends_task",
-        "schedule": 86400.0,  # Daily
+        "schedule": crontab(hour=settings.DAILY_INGESTION_HOUR, minute=20),
         "options": {"queue": "trends"},
     },
 }

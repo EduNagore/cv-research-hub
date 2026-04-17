@@ -290,7 +290,9 @@ export function Dashboard() {
                           </p>
                         </div>
                         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
-                          Updated by the daily Gemini snapshot.
+                          {geminiStatus?.latest_ingestion
+                            ? 'Updated by the daily Gemini snapshot.'
+                            : 'Waiting for the first successful Gemini snapshot. Existing saved items are shown when available.'}
                         </div>
                       </CardContent>
                     </Card>

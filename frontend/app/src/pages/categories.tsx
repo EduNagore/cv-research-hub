@@ -32,7 +32,11 @@ export function Categories() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Categories</h1>
-        <p className="text-muted-foreground">Browse Gemini-prepared category feeds and open the linked sources directly</p>
+        <p className="text-muted-foreground">
+          {feed?.uses_gemini_snapshot
+            ? 'Browse Gemini-prepared category feeds and open the linked sources directly'
+            : 'Browse saved category feeds while the next Gemini snapshot is still pending'}
+        </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

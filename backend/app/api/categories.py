@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.category import Category
 from app.schemas.category import CategoryResponse
-from app.services.content_filters import gemini_discovered_filter
+from app.services.content_filters import get_preferred_content_filter
 from app.models.research_item import ResearchItem
 
 router = APIRouter()
@@ -20,6 +20,7 @@ async def list_categories(
     db: AsyncSession = Depends(get_db),
 ) -> List[CategoryResponse]:
     """List all active categories."""
+    item_filter, _ = await get_preferred_content_filter(db)
     result = await db.execute(
         select(Category)
         .where(Category.is_active == True)
@@ -31,7 +32,7 @@ async def list_categories(
         count_result = await db.execute(
             select(func.count(ResearchItem.id))
             .join(ResearchItem.categories)
-            .where(Category.id == category.id, gemini_discovered_filter())
+            .where(Category.id == category.id, item_filter)
         )
         responses.append(
             CategoryResponse(
@@ -50,6 +51,7 @@ async def get_category_feed(
     db: AsyncSession = Depends(get_db),
 ):
     """Return a Gemini-prepared JSON feed grouped by category."""
+    item_filter, using_gemini_content = await get_preferred_content_filter(db)
     result = await db.execute(
         select(Category)
         .where(Category.is_active == True)
@@ -62,12 +64,12 @@ async def get_category_feed(
         count_result = await db.execute(
             select(func.count(ResearchItem.id))
             .join(ResearchItem.categories)
-            .where(Category.id == category.id, gemini_discovered_filter())
+            .where(Category.id == category.id, item_filter)
         )
         items_result = await db.execute(
             select(ResearchItem)
             .join(ResearchItem.categories)
-            .where(Category.id == category.id, gemini_discovered_filter())
+            .where(Category.id == category.id, item_filter)
             .order_by(ResearchItem.published_date.desc(), ResearchItem.relevance_score.desc())
             .limit(limit_per_category)
         )
@@ -95,6 +97,7 @@ async def get_category_feed(
 
     return {
         "generated_at": datetime.utcnow().isoformat(),
+        "uses_gemini_snapshot": using_gemini_content,
         "categories": feed,
     }
 
@@ -105,6 +108,7 @@ async def get_category(
     db: AsyncSession = Depends(get_db),
 ) -> CategoryResponse:
     """Get a single category by slug."""
+    item_filter, _ = await get_preferred_content_filter(db)
     result = await db.execute(
         select(Category).where(Category.slug == slug)
     )
@@ -116,7 +120,7 @@ async def get_category(
     count_result = await db.execute(
         select(func.count(ResearchItem.id))
         .join(ResearchItem.categories)
-        .where(Category.id == category.id, gemini_discovered_filter())
+        .where(Category.id == category.id, item_filter)
     )
     return CategoryResponse(
         **{
