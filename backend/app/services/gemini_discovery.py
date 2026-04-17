@@ -1,6 +1,7 @@
 """Gemini-powered discovery of fresh research items."""
 import asyncio
 import hashlib
+import html
 import json
 import re
 from datetime import datetime, timezone
@@ -192,7 +193,8 @@ class GeminiDiscoveryService:
             normalized_items = []
             for item in items[: settings.GEMINI_RESULTS_PER_CATEGORY]:
                 if isinstance(item, dict) and item.get("title") and item.get("primary_url") and item.get("summary"):
-                    normalized_items.append(item)
+                    if await self._is_consistent_source_match(client, item):
+                        normalized_items.append(item)
             grouped_items[category_slug] = normalized_items
 
         return grouped_items
@@ -208,12 +210,14 @@ class GeminiDiscoveryService:
             f"{category_lines}\n"
             "Use Google Search grounding. Search for a balanced mix of papers, technical articles, repositories, model releases, "
             "and architecture writeups that are relevant to researchers and builders. Exclude low-quality SEO pages, duplicates, "
-            "and unverifiable claims. Return only one valid JSON object with this exact top-level shape: "
-            "{\"categories\":[{\"category_slug\":\"classification\",\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\","
-            "\"primary_url\":\"https://...\",\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\","
-            "\"authors\":[\"...\"],\"published_at\":\"2026-04-16\",\"summary\":\"...\",\"why_it_matters\":\"...\",\"problem_solved\":\"...\","
+            "and unverifiable claims. Be professional and conservative: never pair a title from one source with a URL from another source, "
+            "never invent links, and omit any item if you are not highly confident the title, summary, and URLs all refer to the same real work. "
+            "Return only one valid JSON object with this exact top-level shape: "
+            "{\"categories\":[{\"category_slug\":\"classification\",\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\"," 
+            "\"primary_url\":\"https://...\",\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\"," 
+            "\"authors\":[\"...\"],\"published_at\":\"2026-04-16\",\"summary\":\"...\",\"why_it_matters\":\"...\",\"problem_solved\":\"...\"," 
             "\"contribution_description\":\"...\",\"use_cases\":[\"...\"],\"category_slugs\":[\"classification\"],\"tags\":[\"...\"],"
-            "\"contribution_type\":\"paper|model|repository|dataset|benchmark\",\"modality\":\"image|video|multimodal|3d|medical|histopathology|dermatology\","
+            "\"contribution_type\":\"paper|model|repository|dataset|benchmark\",\"modality\":\"image|video|multimodal|3d|medical|histopathology|dermatology\"," 
             "\"architecture_family\":\"cnn|transformer|diffusion|gan|autoencoder|rnn|mlp|hybrid|other\",\"model_name\":\"...\",\"source_name\":\"...\"}]}]}"
         )
 
@@ -271,6 +275,74 @@ class GeminiDiscoveryService:
             ordered_segments.append(cleaned)
 
         return " ".join(ordered_segments).strip()
+
+    async def _is_consistent_source_match(self, client: httpx.AsyncClient, item: Dict[str, Any]) -> bool:
+        """Reject obvious title/URL mismatches before saving Gemini output."""
+        title = item.get("title")
+        primary_url = item.get("primary_url")
+        if not isinstance(title, str) or not isinstance(primary_url, str):
+            return False
+
+        page_title = await self._fetch_page_title(client, primary_url)
+        if not page_title:
+            return True
+
+        return self._titles_look_consistent(title, page_title)
+
+    async def _fetch_page_title(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
+        """Fetch an HTML title or og:title for lightweight source validation."""
+        try:
+            response = await client.get(
+                url,
+                follow_redirects=True,
+                headers={"User-Agent": "CVResearchHub/1.0", "Accept": "text/html,application/xhtml+xml"},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "html" not in content_type:
+            return None
+
+        document = response.text[:20000]
+        patterns = [
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']',
+            r"<title[^>]*>(.*?)</title>",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, document, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                return html.unescape(re.sub(r"\s+", " ", match.group(1))).strip()
+        return None
+
+    def _titles_look_consistent(self, expected_title: str, page_title: str) -> bool:
+        """Heuristic title matcher for detecting clear title/URL mismatches."""
+        expected_tokens = self._normalize_title_tokens(expected_title)
+        page_tokens = self._normalize_title_tokens(page_title)
+        if not expected_tokens or not page_tokens:
+            return True
+
+        overlap = expected_tokens & page_tokens
+        if len(overlap) >= min(3, len(expected_tokens)):
+            return True
+
+        return len(overlap) / max(1, min(len(expected_tokens), len(page_tokens))) >= 0.6
+
+    def _normalize_title_tokens(self, value: str) -> set[str]:
+        """Normalize titles into informative tokens for fuzzy matching."""
+        stop_words = {
+            "a", "an", "and", "for", "from", "the", "with", "using", "via", "into",
+            "on", "of", "to", "in", "by", "at", "new", "based", "towards",
+        }
+        cleaned = re.sub(r"[^a-z0-9\s]+", " ", value.lower())
+        return {
+            token
+            for token in cleaned.split()
+            if len(token) > 2 and token not in stop_words
+        }
 
     async def _post_with_retry(
         self,
