@@ -248,8 +248,10 @@ class GeminiDiscoveryService:
                 last_error = exc
                 status_code = exc.response.status_code
                 detail = exc.response.text.strip()
-                if status_code not in {429, 500, 503} or attempt >= settings.GEMINI_MAX_RETRIES:
+                if status_code not in {429, 500, 503}:
                     raise ValueError(f"Gemini API request failed with {status_code}: {detail}") from exc
+                if attempt >= settings.GEMINI_MAX_RETRIES:
+                    break
 
                 retry_after = exc.response.headers.get("retry-after")
                 delay = self._compute_retry_delay(attempt, retry_after)
