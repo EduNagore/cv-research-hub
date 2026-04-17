@@ -6,6 +6,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import insert, or_, select
@@ -34,6 +35,21 @@ class GeminiDiscoveryService:
     """Discover fresh research items with a Gemini-generated category snapshot."""
 
     API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    CODE_HOSTS = {"github.com", "www.github.com", "gitlab.com", "www.gitlab.com", "huggingface.co", "www.huggingface.co"}
+    PAPER_HOST_KEYWORDS = ("arxiv.org", "openreview.net", "cvf.com", "ieeexplore.ieee.org", "springer.com", "acm.org", "doi.org")
+    BLOCKED_SOURCE_HINTS = (
+        "google.com",
+        "bing.com",
+        "search.yahoo.com",
+        "duckduckgo.com",
+        "reddit.com",
+        "facebook.com",
+        "instagram.com",
+        "x.com",
+        "twitter.com",
+        "linkedin.com",
+        "youtube.com",
+    )
 
     def __init__(self, db: AsyncSession, *, batch_id: Optional[str] = None):
         self.db = db
@@ -209,10 +225,17 @@ class GeminiDiscoveryService:
             f"Find up to {settings.GEMINI_RESULTS_PER_CATEGORY} genuinely recent items from the last "
             f"{settings.GEMINI_LOOKBACK_DAYS} days for each of these computer vision categories.\n"
             f"{category_lines}\n"
-            "Use Google Search grounding. Search for a balanced mix of papers, technical articles, repositories, model releases, "
-            "and architecture writeups that are relevant to researchers and builders. Exclude low-quality SEO pages, duplicates, "
-            "and unverifiable claims. Be professional and conservative: never pair a title from one source with a URL from another source, "
-            "never invent links, and omit any item if you are not highly confident the title, summary, and URLs all refer to the same real work. "
+            "Use Google Search grounding. Behave like a rigorous research analyst preparing a professional monitoring brief for expert users. "
+            "Search for a balanced mix of papers, technical articles, repositories, model releases, and architecture writeups that are relevant to researchers and builders. "
+            "Only include items that are real, recent, independently verifiable, and materially relevant to the category. Exclude low-quality SEO pages, news rewrites, listicles, "
+            "content farms, duplicates, speculative claims, marketing pages without technical substance, and any item with conflicting evidence across sources. "
+            "The title, summary, authors, date, and every URL must refer to the exact same work. Never pair a title from one source with a URL from another source. "
+            "Never invent links, never guess missing metadata, and never return a URL unless you have evidence that it is the correct canonical destination. "
+            "Use the canonical landing page for primary_url, not a search result, redirector, tracking URL, PDF mirror, or generic homepage. Prefer official domains, publisher pages, "
+            "conference proceedings, arXiv abs pages, official repositories, or official project/model pages. "
+            "For paper_url return the direct paper page or PDF for that exact work. For code_url return only the official code repository or official model repository. "
+            "For project_page_url return only the official project page for that exact work. If any field is uncertain, omit that item entirely rather than risk a wrong result. "
+            "Summaries must be precise, sober, technically accurate, and suitable for professional research monitoring. Avoid hype, exaggeration, and vague phrasing. "
             "Return only one valid JSON object with this exact top-level shape: "
             "{\"categories\":[{\"category_slug\":\"classification\",\"items\":[{\"title\":\"...\",\"item_type\":\"article|paper|repository|model_release|architecture\"," 
             "\"primary_url\":\"https://...\",\"paper_url\":\"https://...\",\"code_url\":\"https://...\",\"project_page_url\":\"https://...\"," 
@@ -333,9 +356,21 @@ class GeminiDiscoveryService:
         if not isinstance(title, str) or not isinstance(primary_url, str):
             return False
 
-        page_title = await self._fetch_page_title(client, primary_url)
+        normalized_primary_url = self._normalize_url(primary_url)
+        if not normalized_primary_url:
+            return False
+
+        metadata = await self._fetch_url_metadata(client, normalized_primary_url)
+        if metadata is None:
+            return False
+
+        final_url = metadata["final_url"]
+        if not self._is_professional_research_source(final_url):
+            return False
+
+        page_title = metadata.get("page_title")
         if not page_title:
-            return True
+            return False
 
         return self._titles_look_consistent(title, page_title)
 
@@ -350,35 +385,99 @@ class GeminiDiscoveryService:
 
         sanitized = dict(item)
         title = sanitized.get("title", "")
+        sanitized["primary_url"] = self._normalize_url(sanitized.get("primary_url"))
+        if not sanitized["primary_url"]:
+            return None
 
-        for field_name in ("paper_url", "project_page_url"):
+        for field_name, validator in (
+            ("paper_url", self._is_valid_paper_url),
+            ("code_url", self._is_valid_code_url),
+            ("project_page_url", self._is_valid_project_url),
+        ):
             url = sanitized.get(field_name)
             if not isinstance(url, str) or not url.strip():
                 continue
-            if not await self._is_title_consistent_with_url(client, title, url.strip()):
+            normalized_url = self._normalize_url(url)
+            if not normalized_url:
                 sanitized[field_name] = None
+                continue
+            if not await validator(client, title, normalized_url):
+                sanitized[field_name] = None
+                continue
+            sanitized[field_name] = normalized_url
 
         return sanitized
 
-    async def _is_title_consistent_with_url(
+    async def _is_valid_paper_url(
         self,
         client: httpx.AsyncClient,
         title: str,
         url: str,
     ) -> bool:
-        """Best-effort title check for optional secondary links."""
-        page_title = await self._fetch_page_title(client, url)
-        if not page_title:
+        """Require a reachable, paper-like destination for the exact discovered work."""
+        metadata = await self._fetch_url_metadata(client, url)
+        if metadata is None:
+            return False
+
+        final_url = metadata["final_url"]
+        if not self._looks_like_paper_destination(final_url, metadata.get("content_type", "")):
+            return False
+
+        page_title = metadata.get("page_title")
+        if page_title:
+            return self._titles_look_consistent(title, page_title)
+
+        return self._title_tokens_in_url(title, final_url)
+
+    async def _is_valid_code_url(
+        self,
+        client: httpx.AsyncClient,
+        title: str,
+        url: str,
+    ) -> bool:
+        """Require a reachable official repository or model page on a supported code host."""
+        metadata = await self._fetch_url_metadata(client, url)
+        if metadata is None:
+            return False
+
+        final_url = metadata["final_url"]
+        host = (urlparse(final_url).netloc or "").lower()
+        if host not in self.CODE_HOSTS:
+            return False
+
+        page_title = metadata.get("page_title")
+        if page_title and self._titles_look_consistent(title, page_title):
             return True
+
+        return self._title_tokens_in_url(title, final_url)
+
+    async def _is_valid_project_url(
+        self,
+        client: httpx.AsyncClient,
+        title: str,
+        url: str,
+    ) -> bool:
+        """Require a reachable project page whose title matches the discovered work."""
+        metadata = await self._fetch_url_metadata(client, url)
+        if metadata is None:
+            return False
+
+        page_title = metadata.get("page_title")
+        if not page_title:
+            return False
+
         return self._titles_look_consistent(title, page_title)
 
-    async def _fetch_page_title(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
-        """Fetch an HTML title or og:title for lightweight source validation."""
+    async def _fetch_url_metadata(self, client: httpx.AsyncClient, url: str) -> Optional[Dict[str, str]]:
+        """Fetch enough metadata to verify that a URL is reachable and aligned."""
         try:
             response = await client.get(
                 url,
                 follow_redirects=True,
-                headers={"User-Agent": "CVResearchHub/1.0", "Accept": "text/html,application/xhtml+xml"},
+                headers={
+                    "User-Agent": "CVResearchHub/1.0",
+                    "Accept": "text/html,application/xhtml+xml,application/pdf",
+                },
                 timeout=15.0,
             )
             response.raise_for_status()
@@ -386,8 +485,12 @@ class GeminiDiscoveryService:
             return None
 
         content_type = response.headers.get("content-type", "").lower()
+        metadata: Dict[str, str] = {
+            "final_url": str(response.url),
+            "content_type": content_type,
+        }
         if "html" not in content_type:
-            return None
+            return metadata
 
         document = response.text[:20000]
         patterns = [
@@ -398,8 +501,64 @@ class GeminiDiscoveryService:
         for pattern in patterns:
             match = re.search(pattern, document, flags=re.IGNORECASE | re.DOTALL)
             if match:
-                return html.unescape(re.sub(r"\s+", " ", match.group(1))).strip()
-        return None
+                metadata["page_title"] = html.unescape(re.sub(r"\s+", " ", match.group(1))).strip()
+                break
+        return metadata
+
+    def _normalize_url(self, value: Any) -> Optional[str]:
+        """Normalize URLs and reject malformed or non-web links."""
+        if not isinstance(value, str):
+            return None
+
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+
+        return parsed._replace(fragment="").geturl()
+
+    def _is_professional_research_source(self, url: str) -> bool:
+        """Reject search/social destinations while allowing verifiable official sources."""
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+        query = (parsed.query or "").lower()
+        if not host or "." not in host:
+            return False
+        if any(host == hint or host.endswith(f".{hint}") for hint in self.BLOCKED_SOURCE_HINTS):
+            return False
+        if any(token in path for token in ("/search", "/results")):
+            return False
+        if any(token in query for token in ("q=", "query=", "search=")):
+            return False
+        return True
+
+    def _looks_like_paper_destination(self, url: str, content_type: str) -> bool:
+        """Detect whether a URL looks like an actual paper destination."""
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+        if "pdf" in content_type:
+            return True
+        if any(keyword in host for keyword in self.PAPER_HOST_KEYWORDS):
+            return True
+        return any(token in path for token in ("/paper", "/abs/", "/pdf/", "/publication", "/proceedings"))
+
+    def _title_tokens_in_url(self, title: str, url: str) -> bool:
+        """Fallback check when a destination is reachable but has no usable HTML title."""
+        title_tokens = self._normalize_title_tokens(title)
+        if not title_tokens:
+            return False
+
+        url_tokens = self._normalize_title_tokens(urlparse(url).path.replace("/", " "))
+        if not url_tokens:
+            return False
+
+        overlap = title_tokens & url_tokens
+        return len(overlap) >= min(3, len(title_tokens))
 
     def _titles_look_consistent(self, expected_title: str, page_title: str) -> bool:
         """Heuristic title matcher for detecting clear title/URL mismatches."""
@@ -569,6 +728,7 @@ class GeminiDiscoveryService:
             "contribution_description": payload.get("contribution_description"),
             "use_cases": payload.get("use_cases") or None,
             "paper_url": payload.get("paper_url"),
+            "abstract_url": primary_url if "arxiv.org/abs/" in primary_url else None,
             "code_url": payload.get("code_url"),
             "github_url": payload.get("code_url") if "github.com" in (payload.get("code_url") or "") else None,
             "project_page_url": payload.get("project_page_url"),
