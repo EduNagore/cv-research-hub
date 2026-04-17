@@ -1,4 +1,5 @@
 """Gemini-powered discovery of fresh research items."""
+import asyncio
 import hashlib
 import json
 import re
