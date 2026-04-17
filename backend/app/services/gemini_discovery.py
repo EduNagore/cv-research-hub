@@ -233,6 +233,8 @@ class GeminiDiscoveryService:
                 text = part.get("text")
                 if isinstance(text, str) and text.strip():
                     text_chunks.append(text.strip())
+                else:
+                    text_chunks.extend(self._extract_strings_from_part(part))
 
             if text_chunks:
                 return "\n".join(text_chunks).strip()
@@ -243,9 +245,16 @@ class GeminiDiscoveryService:
 
         candidate = candidates[0]
         finish_reason = candidate.get("finishReason")
+        parts = candidate.get("content", {}).get("parts", [])
+        part_keys = [
+            sorted(part.keys()) if isinstance(part, dict) else [type(part).__name__]
+            for part in parts[:5]
+        ]
+        sample_part = parts[0] if parts else None
         raise ValueError(
             "Gemini returned no text content. "
-            f"finishReason={finish_reason!r}, candidate_keys={list(candidate.keys())}"
+            f"finishReason={finish_reason!r}, candidate_keys={list(candidate.keys())}, "
+            f"part_keys={part_keys}, sample_part={sample_part!r}"
         )
 
     def _extract_grounded_text(self, candidate: Dict[str, Any]) -> str:
@@ -275,6 +284,46 @@ class GeminiDiscoveryService:
             ordered_segments.append(cleaned)
 
         return " ".join(ordered_segments).strip()
+
+    def _extract_strings_from_part(self, part: Any) -> List[str]:
+        """Best-effort extraction for variant Gemini part payloads."""
+        collected: List[str] = []
+        self._collect_candidate_strings(part, collected)
+        return [chunk for chunk in collected if chunk.strip()]
+
+    def _collect_candidate_strings(self, value: Any, collected: List[str]) -> None:
+        """Walk a nested response part and collect text-like strings conservatively."""
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned and self._looks_like_meaningful_text(cleaned):
+                collected.append(cleaned)
+            return
+
+        if isinstance(value, list):
+            for item in value:
+                self._collect_candidate_strings(item, collected)
+            return
+
+        if isinstance(value, dict):
+            preferred_keys = (
+                "text",
+                "output",
+                "content",
+                "value",
+                "json",
+                "data",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    self._collect_candidate_strings(value[key], collected)
+
+    def _looks_like_meaningful_text(self, value: str) -> bool:
+        """Filter out obvious non-content strings while keeping JSON/text payloads."""
+        if len(value) < 20:
+            return False
+        if value.startswith("http://") or value.startswith("https://"):
+            return False
+        return any(char.isalpha() for char in value)
 
     async def _is_consistent_source_match(self, client: httpx.AsyncClient, item: Dict[str, Any]) -> bool:
         """Reject obvious title/URL mismatches before saving Gemini output."""
