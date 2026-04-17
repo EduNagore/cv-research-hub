@@ -193,8 +193,9 @@ class GeminiDiscoveryService:
             normalized_items = []
             for item in items[: settings.GEMINI_RESULTS_PER_CATEGORY]:
                 if isinstance(item, dict) and item.get("title") and item.get("primary_url") and item.get("summary"):
-                    if await self._is_consistent_source_match(client, item):
-                        normalized_items.append(item)
+                    sanitized_item = await self._sanitize_discovered_item(client, item)
+                    if sanitized_item:
+                        normalized_items.append(sanitized_item)
             grouped_items[category_slug] = normalized_items
 
         return grouped_items
@@ -338,6 +339,39 @@ class GeminiDiscoveryService:
 
         return self._titles_look_consistent(title, page_title)
 
+    async def _sanitize_discovered_item(
+        self,
+        client: httpx.AsyncClient,
+        item: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate the main source link and drop suspicious secondary links."""
+        if not await self._is_consistent_source_match(client, item):
+            return None
+
+        sanitized = dict(item)
+        title = sanitized.get("title", "")
+
+        for field_name in ("paper_url", "project_page_url"):
+            url = sanitized.get(field_name)
+            if not isinstance(url, str) or not url.strip():
+                continue
+            if not await self._is_title_consistent_with_url(client, title, url.strip()):
+                sanitized[field_name] = None
+
+        return sanitized
+
+    async def _is_title_consistent_with_url(
+        self,
+        client: httpx.AsyncClient,
+        title: str,
+        url: str,
+    ) -> bool:
+        """Best-effort title check for optional secondary links."""
+        page_title = await self._fetch_page_title(client, url)
+        if not page_title:
+            return True
+        return self._titles_look_consistent(title, page_title)
+
     async def _fetch_page_title(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
         """Fetch an HTML title or og:title for lightweight source validation."""
         try:
@@ -375,10 +409,18 @@ class GeminiDiscoveryService:
             return True
 
         overlap = expected_tokens & page_tokens
-        if len(overlap) >= min(3, len(expected_tokens)):
+        if len(overlap) >= min(4, len(expected_tokens)):
             return True
 
-        return len(overlap) / max(1, min(len(expected_tokens), len(page_tokens))) >= 0.6
+        if len(overlap) / max(1, min(len(expected_tokens), len(page_tokens))) >= 0.75:
+            return True
+
+        acronym = "".join(token[0] for token in expected_tokens if token)
+        page_joined = "".join(sorted(page_tokens))
+        if len(acronym) >= 4 and acronym in page_joined:
+            return True
+
+        return False
 
     def _normalize_title_tokens(self, value: str) -> set[str]:
         """Normalize titles into informative tokens for fuzzy matching."""
