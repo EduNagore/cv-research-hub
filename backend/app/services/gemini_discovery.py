@@ -220,10 +220,20 @@ class GeminiDiscoveryService:
         if not candidates:
             raise ValueError("Gemini returned no candidates")
 
-        parts = candidates[0].get("content", {}).get("parts", [])
-        text_chunks = [part.get("text", "") for part in parts if part.get("text")]
+        candidate = candidates[0]
+        parts = candidate.get("content", {}).get("parts", [])
+        text_chunks = []
+        for part in parts:
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                text_chunks.append(text.strip())
+
         if not text_chunks:
-            raise ValueError("Gemini returned no text content")
+            finish_reason = candidate.get("finishReason")
+            raise ValueError(
+                "Gemini returned no text content. "
+                f"finishReason={finish_reason!r}, candidate_keys={list(candidate.keys())}"
+            )
 
         return "\n".join(text_chunks).strip()
 
