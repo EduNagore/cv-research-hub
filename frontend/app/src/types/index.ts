@@ -224,6 +224,8 @@ export interface GeminiCategoryStatus {
   slug: string;
   item_count: number;
   latest_ingestion?: string | null;
+  last_status?: string;
+  last_error?: string | null;
 }
 
 export interface GeminiDiscoveryStatus {
@@ -235,6 +237,8 @@ export interface GeminiDiscoveryStatus {
   category_refresh_enabled: boolean;
   manual_refresh_enabled: boolean;
   latest_ingestion?: string | null;
+  last_status?: string;
+  last_error?: string | null;
   total_items: number;
   categories: GeminiCategoryStatus[];
 }

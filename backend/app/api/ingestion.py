@@ -11,9 +11,11 @@ from app.core.database import get_db
 from app.core.database import AsyncSessionLocal
 from app.core.config import get_settings
 from app.models.category import Category
+from app.models.ingestion_status import IngestionStatus
 from app.models.research_item import ResearchItem, SourceType
 from app.services.content_filters import gemini_discovered_filter
 from app.services.ingestion import IngestionService
+from app.services.ingestion_status import IngestionStatusService
 from app.services.ingestion_runner import run_ingestion_job
 
 router = APIRouter()
@@ -237,13 +239,15 @@ async def get_ingestion_status(
             ),
         }
 
-    gemini_latest_result = await db.execute(
-        select(func.max(ResearchItem.last_ingested_at)).where(gemini_filter)
+    gemini_status_result = await db.execute(
+        select(IngestionStatus).where(
+            IngestionStatus.scope_key == IngestionStatusService.build_scope_key("gemini")
+        )
     )
     gemini_total_result = await db.execute(
         select(func.count(ResearchItem.id)).where(gemini_filter)
     )
-    gemini_latest = gemini_latest_result.scalar_one_or_none()
+    gemini_status = gemini_status_result.scalar_one_or_none()
 
     categories_result = await db.execute(
         select(Category).where(Category.is_active == True).order_by(Category.display_order)
@@ -255,18 +259,25 @@ async def get_ingestion_status(
             .join(ResearchItem.categories)
             .where(Category.id == category.id, gemini_filter)
         )
-        category_latest_result = await db.execute(
-            select(func.max(ResearchItem.last_ingested_at))
-            .join(ResearchItem.categories)
-            .where(Category.id == category.id, gemini_filter)
+        category_status_result = await db.execute(
+            select(IngestionStatus).where(
+                IngestionStatus.scope_key
+                == IngestionStatusService.build_scope_key("gemini", category.slug)
+            )
         )
-        category_latest = category_latest_result.scalar_one_or_none()
+        category_status = category_status_result.scalar_one_or_none()
         gemini_categories.append(
             {
                 "name": category.name,
                 "slug": category.slug,
                 "item_count": category_count_result.scalar() or 0,
-                "latest_ingestion": category_latest.isoformat() if category_latest else None,
+                "latest_ingestion": (
+                    category_status.last_completed_at.isoformat()
+                    if category_status and category_status.last_completed_at
+                    else None
+                ),
+                "last_status": category_status.last_status if category_status else "idle",
+                "last_error": category_status.last_error if category_status else None,
             }
         )
     
@@ -280,7 +291,13 @@ async def get_ingestion_status(
             "full_refresh_enabled": settings.GEMINI_ENABLE_FULL_REFRESH,
             "category_refresh_enabled": settings.GEMINI_ENABLE_CATEGORY_REFRESH,
             "manual_refresh_enabled": settings.GEMINI_ENABLE_MANUAL_REFRESH,
-            "latest_ingestion": gemini_latest.isoformat() if gemini_latest else None,
+            "latest_ingestion": (
+                gemini_status.last_completed_at.isoformat()
+                if gemini_status and gemini_status.last_completed_at
+                else None
+            ),
+            "last_status": gemini_status.last_status if gemini_status else "idle",
+            "last_error": gemini_status.last_error if gemini_status else None,
             "total_items": gemini_total_result.scalar() or 0,
             "categories": gemini_categories,
         },

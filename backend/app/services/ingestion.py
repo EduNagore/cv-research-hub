@@ -27,6 +27,7 @@ from app.models.tag import Tag
 from app.models.user_item import UserItem
 from app.services.classification import ClassificationService
 from app.services.gemini_discovery import GeminiDiscoveryService
+from app.services.ingestion_status import IngestionStatusService
 from app.services.scoring import ScoringService
 
 settings = get_settings()
@@ -63,17 +64,92 @@ class IngestionService:
         """Discover recent items with Gemini and store them as research items."""
         if reset_existing:
             await self.clear_gemini_items()
+        status_service = IngestionStatusService(self.db)
+        await status_service.mark_started("gemini")
         service = GeminiDiscoveryService(self.db, batch_id=self.batch_id)
-        result = await service.run_daily_discovery()
-        await self.db.commit()
-        return result
+        try:
+            result = await service.run_daily_discovery()
+            completed_at = datetime.utcnow()
+            status_value = "failed" if result.get("error") else "success"
+            await status_service.mark_completed(
+                "gemini",
+                completed_at=completed_at,
+                status_value=status_value,
+                error=result.get("error"),
+                result=result,
+            )
+            for category_result in result.get("categories", []):
+                category_slug = category_result.get("category")
+                if not category_slug:
+                    continue
+                await status_service.mark_started("gemini", category_slug)
+                await status_service.mark_completed(
+                    "gemini",
+                    category_slug,
+                    completed_at=completed_at,
+                    status_value="failed" if category_result.get("error") else status_value,
+                    error=category_result.get("error"),
+                    result=category_result,
+                )
+            await self.db.commit()
+            return result
+        except Exception as exc:
+            await status_service.mark_completed(
+                "gemini",
+                status_value="failed",
+                error=str(exc),
+            )
+            await self.db.commit()
+            raise
 
     async def ingest_gemini_category(self, category_slug: str) -> Dict:
         """Discover recent items with Gemini for a single category."""
+        status_service = IngestionStatusService(self.db)
+        await status_service.mark_started("gemini")
+        await status_service.mark_started("gemini", category_slug)
         service = GeminiDiscoveryService(self.db, batch_id=self.batch_id)
-        result = await service.run_category_discovery(category_slug)
-        await self.db.commit()
-        return result
+        try:
+            result = await service.run_category_discovery(category_slug)
+            completed_at = datetime.utcnow()
+            overall_error = result.get("error")
+            category_result = next(
+                (entry for entry in result.get("categories", []) if entry.get("category") == category_slug),
+                None,
+            )
+            category_error = category_result.get("error") if category_result else overall_error
+            await status_service.mark_completed(
+                "gemini",
+                completed_at=completed_at,
+                status_value="failed" if overall_error else "success",
+                error=overall_error,
+                result=result,
+            )
+            await status_service.mark_completed(
+                "gemini",
+                category_slug,
+                completed_at=completed_at,
+                status_value="failed" if category_error else "success",
+                error=category_error,
+                result=category_result or result,
+            )
+            await self.db.commit()
+            return result
+        except Exception as exc:
+            await status_service.mark_completed(
+                "gemini",
+                completed_at=datetime.utcnow(),
+                status_value="failed",
+                error=str(exc),
+            )
+            await status_service.mark_completed(
+                "gemini",
+                category_slug,
+                completed_at=datetime.utcnow(),
+                status_value="failed",
+                error=str(exc),
+            )
+            await self.db.commit()
+            raise
 
     async def clear_gemini_items(self) -> Dict:
         """Delete only Gemini-discovered items and refresh related counts."""

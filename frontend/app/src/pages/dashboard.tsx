@@ -257,11 +257,13 @@ export function Dashboard() {
                       <p>Manual refresh: {geminiStatus?.manual_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
                       <p>Category refresh: {geminiStatus?.category_refresh_enabled ? 'Enabled' : 'Disabled'}</p>
                       <p>
-                        Last run:{' '}
+                        Last snapshot:{' '}
                         {geminiStatus?.latest_ingestion
                           ? new Date(geminiStatus.latest_ingestion).toLocaleString()
                           : 'Never'}
                       </p>
+                      <p>Status: {geminiStatus?.last_status || 'idle'}</p>
+                      {geminiStatus?.last_error && <p>Last error: {geminiStatus.last_error}</p>}
                     </div>
                     <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
                       Visitors do not trigger Gemini requests. The scheduler prepares the content once per day and the
@@ -283,15 +285,17 @@ export function Dashboard() {
                         <div className="text-sm text-muted-foreground space-y-1">
                           <p>{category.item_count.toLocaleString()} items indexed</p>
                           <p>
-                            Last run:{' '}
+                            Last snapshot:{' '}
                             {category.latest_ingestion
                               ? new Date(category.latest_ingestion).toLocaleString()
                               : 'Never'}
                           </p>
+                          <p>Status: {category.last_status || 'idle'}</p>
+                          {category.last_error && <p>Last error: {category.last_error}</p>}
                         </div>
                         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
                           {geminiStatus?.latest_ingestion
-                            ? 'Updated by the daily Gemini snapshot.'
+                            ? 'This timestamp reflects the category snapshot job, even if no new items were saved.'
                             : 'Waiting for the first successful Gemini snapshot. Existing saved items are shown when available.'}
                         </div>
                       </CardContent>
